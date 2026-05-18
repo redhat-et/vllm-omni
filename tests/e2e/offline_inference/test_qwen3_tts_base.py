@@ -116,16 +116,16 @@ def test_base_voice_clone_special_characters(omni_runner, omni_runner_handler) -
 @pytest.mark.tts
 @hardware_test(res={"cuda": "L4"}, num_cards=1)
 @pytest.mark.parametrize("omni_runner", tts_server_params, indirect=True)
-def test_base_voice_clone_with_typos(omni_runner, omni_runner_handler) -> None:
+def test_base_voice_clone_with_disfluent_text(omni_runner, omni_runner_handler) -> None:
     """
-    Test voice cloning with deliberately misspelled/malformed input text.
+    Test voice cloning with disfluent/malformed input text (filler words, repetition).
     Deploy Setting: qwen3_tts_no_async_chunk.yaml + enforce_eager=true
-    Input Modal: text with deliberate typos
+    Input Modal: text with disfluencies and filler words
     Output Modal: audio
     Extra Setting: task_type=Base, voice=clone, ref_audio/ref_text provided
     """
     request_config = {
-        "input": "Ths is a tset of teh text too speech systm with typoes.",
+        "input": "Uh um so like, ya know, the the the thing is... mhmm, kinda sorta maybe?!",
         "task_type": "Base",
         "voice": "clone",
         "ref_audio": REF_AUDIO_URL,

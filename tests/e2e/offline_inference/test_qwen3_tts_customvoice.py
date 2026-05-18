@@ -77,3 +77,114 @@ def test_text_to_audio_001(omni_runner, omni_runner_handler) -> None:
     """
     request_config = {"input": get_prompt(), "voice": "vivian"}
     omni_runner_handler.send_audio_speech_request(request_config)
+
+
+@pytest.mark.advanced_model
+@pytest.mark.tts
+@hardware_test(res={"cuda": "L4"}, num_cards=1)
+@pytest.mark.parametrize("omni_runner", tts_server_params, indirect=True)
+def test_customvoice_special_characters(omni_runner, omni_runner_handler) -> None:
+    """
+    Test text-to-audio with heavy punctuation and special characters.
+    Deploy Setting: qwen3_tts_no_async_chunk.yaml + enforce_eager=true
+    Input Modal: text with special characters (!,;$£€%...)
+    Output Modal: audio
+    """
+    request_config = {
+        "input": "Wait — really?! That costs $99.99; not £50 (or €45)... wow!",
+        "voice": "vivian",
+    }
+    omni_runner_handler.send_audio_speech_request(request_config)
+
+
+@pytest.mark.advanced_model
+@pytest.mark.tts
+@hardware_test(res={"cuda": "L4"}, num_cards=1)
+@pytest.mark.parametrize("omni_runner", tts_server_params, indirect=True)
+def test_customvoice_acronyms_and_abbreviations(omni_runner, omni_runner_handler) -> None:
+    """
+    Test text-to-audio with acronyms and abbreviations.
+    Deploy Setting: qwen3_tts_no_async_chunk.yaml + enforce_eager=true
+    Input Modal: text with e.g., i.e., Dr., p.m., acronyms
+    Output Modal: audio
+    """
+    request_config = {
+        "input": "The CEO of NASA, e.g. Dr. Smith, will arrive at 3 p.m. i.e. before the Q&A.",
+        "voice": "vivian",
+    }
+    omni_runner_handler.send_audio_speech_request(request_config)
+
+
+@pytest.mark.advanced_model
+@pytest.mark.tts
+@hardware_test(res={"cuda": "L4"}, num_cards=1)
+@pytest.mark.parametrize("omni_runner", tts_server_params, indirect=True)
+def test_customvoice_chinese_text(omni_runner, omni_runner_handler) -> None:
+    """
+    Test text-to-audio with Chinese language text.
+    Deploy Setting: qwen3_tts_no_async_chunk.yaml + enforce_eager=true
+    Input Modal: Chinese text
+    Output Modal: audio
+    Extra Setting: language=Chinese
+    """
+    request_config = {
+        "input": "北京是中国的首都，有着悠久的历史和丰富的文化。",
+        "voice": "vivian",
+        "language": "Chinese",
+    }
+    omni_runner_handler.send_audio_speech_request(request_config)
+
+
+@pytest.mark.advanced_model
+@pytest.mark.tts
+@hardware_test(res={"cuda": "L4"}, num_cards=1)
+@pytest.mark.parametrize("omni_runner", tts_server_params, indirect=True)
+@pytest.mark.xfail(reason="Offline pipeline does not validate empty input", strict=True)
+def test_customvoice_rejects_empty_input(omni_runner, omni_runner_handler) -> None:
+    """
+    Negative test: empty input text should be rejected.
+    Deploy Setting: qwen3_tts_no_async_chunk.yaml + enforce_eager=true
+    Input Modal: empty string
+    Expected: ValueError or RuntimeError
+    """
+    request_config = {"input": "", "voice": "vivian"}
+    with pytest.raises((ValueError, RuntimeError)):
+        omni_runner_handler.send_audio_speech_request(request_config)
+
+
+@pytest.mark.advanced_model
+@pytest.mark.tts
+@hardware_test(res={"cuda": "L4"}, num_cards=1)
+@pytest.mark.parametrize("omni_runner", tts_server_params, indirect=True)
+@pytest.mark.xfail(reason="Offline pipeline does not validate whitespace-only input", strict=True)
+def test_customvoice_rejects_whitespace_only_input(omni_runner, omni_runner_handler) -> None:
+    """
+    Negative test: whitespace-only input (spaces, tabs, newlines) should be rejected.
+    Deploy Setting: qwen3_tts_no_async_chunk.yaml + enforce_eager=true
+    Input Modal: whitespace/tabs/newlines only
+    Expected: ValueError or RuntimeError
+    """
+    request_config = {"input": "   \t\n  ", "voice": "vivian"}
+    with pytest.raises((ValueError, RuntimeError)):
+        omni_runner_handler.send_audio_speech_request(request_config)
+
+
+@pytest.mark.advanced_model
+@pytest.mark.tts
+@hardware_test(res={"cuda": "L4"}, num_cards=1)
+@pytest.mark.parametrize("omni_runner", tts_server_params, indirect=True)
+def test_customvoice_handles_very_long_input(omni_runner, omni_runner_handler) -> None:
+    """
+    Test text-to-audio with very long input text (~5000 chars).
+    Deploy Setting: qwen3_tts_no_async_chunk.yaml + enforce_eager=true
+    Input Modal: long repeated text
+    Output Modal: audio
+    Extra Setting: max_new_tokens=512 to cap generation time
+    """
+    long_text = "This is a sentence that will be repeated many times to create a very long input. " * 60
+    request_config = {
+        "input": long_text,
+        "voice": "vivian",
+        "max_new_tokens": 512,
+    }
+    omni_runner_handler.send_audio_speech_request(request_config)

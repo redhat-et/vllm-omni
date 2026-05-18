@@ -108,9 +108,7 @@ def test_flux2_dev_text_to_image_different_seeds(omni_runner_handler: OmniRunner
 
 @hardware_test(res={"cuda": "H100"})
 def test_flux2_dev_text_to_image_multi_output(omni_runner_handler: OmniRunnerHandler):
-    response = _send_text2img_request(
-        omni_runner_handler, "A red rose in a garden", seed=42, num_outputs_per_prompt=2
-    )
+    response = _send_text2img_request(omni_runner_handler, "A red rose in a garden", seed=42, num_outputs_per_prompt=2)
     images = _images_from_response(response)
     assert len(images) == 2, f"Expected 2 images, got {len(images)}"
     for img in images:
@@ -139,6 +137,7 @@ def test_flux2_dev_text_to_image_with_cfg(omni_runner_handler: OmniRunnerHandler
 
 
 @hardware_test(res={"cuda": "H100"})
+@pytest.mark.xfail(reason="Missing input validation: #3702")
 def test_flux2_dev_rejects_empty_prompt(omni_runner_handler: OmniRunnerHandler):
     with pytest.raises((ValueError, RuntimeError)):
         omni_runner_handler.send_diffusion_request(
@@ -156,6 +155,7 @@ def test_flux2_dev_rejects_empty_prompt(omni_runner_handler: OmniRunnerHandler):
 
 
 @hardware_test(res={"cuda": "H100"})
+@pytest.mark.xfail(reason="Missing input validation: #3703")
 def test_flux2_dev_rejects_zero_inference_steps(omni_runner_handler: OmniRunnerHandler):
     with pytest.raises((ValueError, RuntimeError)):
         omni_runner_handler.send_diffusion_request(

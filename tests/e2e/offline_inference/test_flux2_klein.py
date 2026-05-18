@@ -164,6 +164,61 @@ def test_flux2_klein_text_to_image_multi_output(omni_runner_handler: OmniRunnerH
 
 @pytest.mark.advanced_model
 @pytest.mark.diffusion
+def test_flux2_klein_rejects_empty_prompt(omni_runner_handler: OmniRunnerHandler):
+    with pytest.raises((ValueError, RuntimeError)):
+        omni_runner_handler.send_diffusion_request(
+            {
+                "model": MODEL,
+                "prompt": "",
+                "sampling_params": OmniDiffusionSamplingParams(
+                    height=_HEIGHT,
+                    width=_WIDTH,
+                    num_inference_steps=_NUM_INFERENCE_STEPS,
+                    seed=42,
+                ),
+            }
+        )
+
+
+@pytest.mark.advanced_model
+@pytest.mark.diffusion
+def test_flux2_klein_rejects_zero_inference_steps(omni_runner_handler: OmniRunnerHandler):
+    with pytest.raises((ValueError, RuntimeError)):
+        omni_runner_handler.send_diffusion_request(
+            {
+                "model": MODEL,
+                "prompt": "A cat on a laptop",
+                "sampling_params": OmniDiffusionSamplingParams(
+                    height=_HEIGHT,
+                    width=_WIDTH,
+                    num_inference_steps=0,
+                    seed=42,
+                ),
+            }
+        )
+
+
+@pytest.mark.advanced_model
+@pytest.mark.diffusion
+def test_flux2_klein_handles_non_divisible_dimensions(omni_runner_handler: OmniRunnerHandler):
+    response = omni_runner_handler.send_diffusion_request(
+        {
+            "model": MODEL,
+            "prompt": "A cat on a laptop",
+            "sampling_params": OmniDiffusionSamplingParams(
+                height=513,
+                width=513,
+                num_inference_steps=_NUM_INFERENCE_STEPS,
+                seed=42,
+            ),
+        }
+    )
+    images = _images_from_response(response)
+    assert len(images) > 0, "Non-divisible dimensions should be handled gracefully"
+
+
+@pytest.mark.advanced_model
+@pytest.mark.diffusion
 @hardware_test(res={"cuda": "L4"}, num_cards=1)
 def test_flux2_klein_inpaint_basic(omni_runner_handler: OmniRunnerHandler):
     input_image, mask_image = _create_test_inputs()

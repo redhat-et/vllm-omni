@@ -153,9 +153,7 @@ def test_flux2_klein_text_to_image_different_seeds(omni_runner_handler: OmniRunn
 @pytest.mark.advanced_model
 @pytest.mark.diffusion
 def test_flux2_klein_text_to_image_multi_output(omni_runner_handler: OmniRunnerHandler):
-    response = _send_text2img_request(
-        omni_runner_handler, "A red rose in a garden", seed=42, num_outputs_per_prompt=2
-    )
+    response = _send_text2img_request(omni_runner_handler, "A red rose in a garden", seed=42, num_outputs_per_prompt=2)
     images = _images_from_response(response)
     assert len(images) == 2, f"Expected 2 images, got {len(images)}"
     for img in images:

@@ -2,9 +2,10 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 """
-End-to-end test for Flux2 Klein inpainting.
+End-to-end tests for Flux2 Klein text-to-image and inpainting.
 
-Inpainting uses ``omni_runner_handler.send_diffusion_request`` with
+Text-to-image tests use ``send_diffusion_request`` with a prompt and
+``OmniDiffusionSamplingParams``. Inpainting tests additionally pass
 ``multi_modal_data`` containing ``image`` and ``mask_image``; see
 :meth:`OmniRunnerHandler.send_diffusion_request` in ``tests.helpers.runtime``.
 """
@@ -13,6 +14,7 @@ import pytest
 import torch
 from PIL import Image, ImageDraw
 
+from tests.helpers.assertions import assert_image_valid
 from tests.helpers.mark import hardware_test
 from tests.helpers.runtime import DiffusionResponse, OmniRunnerHandler
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
@@ -50,6 +52,27 @@ def _images_from_response(response: DiffusionResponse) -> list[Image.Image]:
     return list(response.images)
 
 
+def _send_text2img_request(
+    omni_runner_handler: OmniRunnerHandler,
+    prompt: str,
+    seed: int,
+    num_outputs_per_prompt: int = 1,
+) -> DiffusionResponse:
+    return omni_runner_handler.send_diffusion_request(
+        {
+            "model": MODEL,
+            "prompt": prompt,
+            "sampling_params": OmniDiffusionSamplingParams(
+                height=_HEIGHT,
+                width=_WIDTH,
+                num_inference_steps=_NUM_INFERENCE_STEPS,
+                seed=seed,
+                num_outputs_per_prompt=num_outputs_per_prompt,
+            ),
+        }
+    )
+
+
 def _send_inpaint_with_generator(
     omni_runner_handler: OmniRunnerHandler, prompt: str, input_image, mask_image, generator: torch.Generator
 ) -> DiffusionResponse:
@@ -81,6 +104,62 @@ def test_flux2_klein_can_accept_text_inputs(omni_runner_handler: OmniRunnerHandl
             "sampling_params": OmniDiffusionSamplingParams(num_inference_steps=2, seed=42),
         }
     )
+
+
+@pytest.mark.advanced_model
+@pytest.mark.diffusion
+def test_flux2_klein_text_to_image(omni_runner_handler: OmniRunnerHandler):
+    response = _send_text2img_request(omni_runner_handler, "A cat on a laptop", seed=42)
+    images = _images_from_response(response)
+    assert len(images) > 0, "No images in response"
+    for img in images:
+        assert_image_valid(img, width=_WIDTH, height=_HEIGHT)
+
+
+@pytest.mark.advanced_model
+@pytest.mark.diffusion
+def test_flux2_klein_text_to_image_deterministic(omni_runner_handler: OmniRunnerHandler):
+    prompt = "A mountain landscape at sunset"
+    seed = 12345
+
+    r1 = _send_text2img_request(omni_runner_handler, prompt, seed=seed)
+    r2 = _send_text2img_request(omni_runner_handler, prompt, seed=seed)
+
+    images1 = _images_from_response(r1)
+    images2 = _images_from_response(r2)
+
+    assert list(images1[0].get_flattened_data()) == list(images2[0].get_flattened_data()), (
+        "Same prompt with same seed should produce identical output."
+    )
+
+
+@pytest.mark.advanced_model
+@pytest.mark.diffusion
+def test_flux2_klein_text_to_image_different_seeds(omni_runner_handler: OmniRunnerHandler):
+    prompt = "A beautiful landscape"
+
+    r1 = _send_text2img_request(omni_runner_handler, prompt, seed=42)
+    r2 = _send_text2img_request(omni_runner_handler, prompt, seed=99999)
+
+    images1 = _images_from_response(r1)
+    images2 = _images_from_response(r2)
+
+    different_pixel_count = sum(
+        1 for p1, p2 in zip(images1[0].get_flattened_data(), images2[0].get_flattened_data()) if p1 != p2
+    )
+    assert different_pixel_count > 0, "Different seeds should produce different outputs"
+
+
+@pytest.mark.advanced_model
+@pytest.mark.diffusion
+def test_flux2_klein_text_to_image_multi_output(omni_runner_handler: OmniRunnerHandler):
+    response = _send_text2img_request(
+        omni_runner_handler, "A red rose in a garden", seed=42, num_outputs_per_prompt=2
+    )
+    images = _images_from_response(response)
+    assert len(images) == 2, f"Expected 2 images, got {len(images)}"
+    for img in images:
+        assert_image_valid(img, width=_WIDTH, height=_HEIGHT)
 
 
 @pytest.mark.advanced_model

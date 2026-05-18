@@ -155,7 +155,7 @@ def test_customvoice_rejects_empty_input(omni_runner, omni_runner_handler) -> No
 @pytest.mark.tts
 @hardware_test(res={"cuda": "L4"}, num_cards=1)
 @pytest.mark.parametrize("omni_runner", tts_server_params, indirect=True)
-@pytest.mark.xfail(reason="Offline pipeline does not validate whitespace-only input", strict=True)
+@pytest.mark.xfail(reason="Offline pipeline does not validate whitespace-only input (#3706)", strict=True)
 def test_customvoice_rejects_whitespace_only_input(omni_runner, omni_runner_handler) -> None:
     """
     Negative test: whitespace-only input (spaces, tabs, newlines) should be rejected.

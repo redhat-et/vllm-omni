@@ -160,7 +160,7 @@ def test_base_rejects_empty_input(omni_runner, omni_runner_handler) -> None:
 @pytest.mark.tts
 @hardware_test(res={"cuda": "L4"}, num_cards=1)
 @pytest.mark.parametrize("omni_runner", tts_server_params, indirect=True)
-@pytest.mark.xfail(reason="Offline pipeline does not validate missing ref_audio for Base task", strict=True)
+@pytest.mark.xfail(reason="Offline pipeline does not validate missing ref_audio for Base task (#3707)", strict=True)
 def test_base_rejects_missing_ref_audio(omni_runner, omni_runner_handler) -> None:
     """
     Negative test: Base task without ref_audio or ref_text should be rejected.
@@ -180,7 +180,7 @@ def test_base_rejects_missing_ref_audio(omni_runner, omni_runner_handler) -> Non
 @pytest.mark.tts
 @hardware_test(res={"cuda": "L4"}, num_cards=1)
 @pytest.mark.parametrize("omni_runner", tts_server_params, indirect=True)
-@pytest.mark.xfail(reason="Offline pipeline does not validate missing ref_text for Base task", strict=True)
+@pytest.mark.xfail(reason="Offline pipeline does not validate missing ref_text for Base task (#3708)", strict=True)
 def test_base_rejects_missing_ref_text(omni_runner, omni_runner_handler) -> None:
     """
     Negative test: Base task with ref_audio but no ref_text should be rejected.

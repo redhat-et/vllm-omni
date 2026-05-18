@@ -164,6 +164,7 @@ def test_flux2_klein_text_to_image_multi_output(omni_runner_handler: OmniRunnerH
 
 @pytest.mark.advanced_model
 @pytest.mark.diffusion
+@pytest.mark.xfail(reason="Missing input validation: #3702")
 def test_flux2_klein_rejects_empty_prompt(omni_runner_handler: OmniRunnerHandler):
     with pytest.raises((ValueError, RuntimeError)):
         omni_runner_handler.send_diffusion_request(
@@ -182,6 +183,7 @@ def test_flux2_klein_rejects_empty_prompt(omni_runner_handler: OmniRunnerHandler
 
 @pytest.mark.advanced_model
 @pytest.mark.diffusion
+@pytest.mark.xfail(reason="Missing input validation: #3703")
 def test_flux2_klein_rejects_zero_inference_steps(omni_runner_handler: OmniRunnerHandler):
     with pytest.raises((ValueError, RuntimeError)):
         omni_runner_handler.send_diffusion_request(

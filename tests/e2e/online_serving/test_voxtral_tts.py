@@ -110,7 +110,7 @@ class TestVoxtralTTSFixedVoice:
                     "speed": speed,
                 }
             )
-    
+
     @pytest.mark.advanced_model
     @pytest.mark.tts
     @hardware_test(res={"cuda": "H100"}, num_cards=1)
@@ -120,7 +120,7 @@ class TestVoxtralTTSFixedVoice:
             "Speak formally",
             "Speak angrily",
             "Deliver with a sad voice",
-            "Speak with a chirpy happy voice"
+            "Speak with a chirpy happy voice",
         ]
         for instruction in instructions:
             openai_client.send_audio_speech_request(
@@ -134,7 +134,7 @@ class TestVoxtralTTSFixedVoice:
                     "instructions": instruction,
                 }
             )
-    
+
     @pytest.mark.advanced_model
     @pytest.mark.tts
     @hardware_test(res={"cuda": "H100"}, num_cards=1)

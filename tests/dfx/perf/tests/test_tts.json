@@ -362,7 +362,7 @@
           "median_audio_ttfp_ms": [150],
           "median_audio_rtf": [0.15]
         }
-      },      
+      },
       {
         "task": "default_voice",
         "eval_phase": "throughput",

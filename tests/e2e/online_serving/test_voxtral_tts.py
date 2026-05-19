@@ -152,3 +152,29 @@ class TestVoxtralTTSFixedVoice:
                     "timeout": 120.0,
                 }
             )
+
+    @pytest.mark.advanced_model
+    @pytest.mark.tts
+    @hardware_test(res={"cuda": "H100"}, num_cards=1)
+    def test_speech_batches(self, omni_server, openai_client) -> None:
+        """Test TTS batches"""
+        items = [
+            {"input": "The birch canoe slid on the smooth planks."},
+            {"input": "Glue the sheet to the dark blue background."},
+            {"input": "It's easy to tell the depth of a well."},
+            {"input": "These days a chicken leg is a rare dish."},
+            {"input": "Rice is often served in round bowls."},
+        ]
+
+        openai_client.send_audio_speech_batch_http_request(
+            {
+                "json": {
+                    "model": omni_server.model,
+                    "items": items,
+                    "voice": "casual_male",
+                    "language": "English",
+                    "response_format": "wav",
+                },
+                "timeout": 120.0,
+            }
+        )

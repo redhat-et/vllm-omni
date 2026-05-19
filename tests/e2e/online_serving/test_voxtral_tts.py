@@ -91,3 +91,64 @@ class TestVoxtralTTSFixedVoice:
                     "timeout": 120.0,
                 }
             )
+
+    @pytest.mark.advanced_model
+    @pytest.mark.tts
+    @hardware_test(res={"cuda": "H100"}, num_cards=1)
+    def test_speech_speed(self, omni_server, openai_client) -> None:
+        """Request with speed parameters"""
+        speeds = [0.5, 1, 1.5, 2, 2.5]
+        for speed in speeds:
+            openai_client.send_audio_speech_request(
+                {
+                    "model": omni_server.model,
+                    "input": "The boy was there when the sun rose.",
+                    "voice": "casual_female",
+                    "language": "English",
+                    "response_format": "wav",
+                    "timeout": 120.0,
+                    "speed": speed,
+                }
+            )
+    
+    @pytest.mark.advanced_model
+    @pytest.mark.tts
+    @hardware_test(res={"cuda": "H100"}, num_cards=1)
+    def test_speech_instructions(self, omni_server, openai_client) -> None:
+        """Request with instructions parameters"""
+        instructions = [
+            "Speak formally",
+            "Speak angrily",
+            "Deliver with a sad voice",
+            "Speak with a chirpy happy voice"
+        ]
+        for instruction in instructions:
+            openai_client.send_audio_speech_request(
+                {
+                    "model": omni_server.model,
+                    "input": "The boy was there when the sun rose.",
+                    "voice": "casual_female",
+                    "language": "English",
+                    "response_format": "wav",
+                    "timeout": 120.0,
+                    "instructions": instruction,
+                }
+            )
+    
+    @pytest.mark.advanced_model
+    @pytest.mark.tts
+    @hardware_test(res={"cuda": "H100"}, num_cards=1)
+    def test_speech_response_formats(self, omni_server, openai_client) -> None:
+        """Test TTS with different response formats"""
+        response_formats = ["wav", "mp3"]
+        for response_format in response_formats:
+            openai_client.send_audio_speech_request(
+                {
+                    "model": omni_server.model,
+                    "input": "Testing various response formats.",
+                    "voice": "casual_male",
+                    "language": "English",
+                    "response_format": response_format,
+                    "timeout": 120.0,
+                }
+            )

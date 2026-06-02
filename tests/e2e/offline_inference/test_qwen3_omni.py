@@ -126,7 +126,7 @@ def test_video_to_audio(omni_runner, omni_runner_handler) -> None:
     """Test processing video, generating audio output."""
     video = generate_synthetic_video(224, 224, 300)["np_array"]
 
-    request_config = {"prompts": get_question(), "videos": video, "modalities": ["audio"]}
+    request_config = {"prompts": get_question("video"), "videos": video, "modalities": ["audio"]}
 
     # Test single completion
     omni_runner_handler.send_omni_request(request_config)

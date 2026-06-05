@@ -69,9 +69,8 @@ def get_prompt():
 def test_text_to_audio_001(omni_runner, omni_runner_handler) -> None:
     """
     Test text input processing and audio output via offline Omni runner.
-    Deploy Setting: qwen3_tts_no_async_chunk.yaml + enforce_eager=true
-    Input Modal: text
-    Output Modal: audio
+Input Modality: text
+    Output Modality: audio
     Input Setting: stream=False
     Datasets: few requests
     """
@@ -86,9 +85,8 @@ def test_text_to_audio_001(omni_runner, omni_runner_handler) -> None:
 def test_customvoice_special_characters(omni_runner, omni_runner_handler) -> None:
     """
     Test text-to-audio with heavy punctuation and special characters.
-    Deploy Setting: qwen3_tts_no_async_chunk.yaml + enforce_eager=true
-    Input Modal: text with special characters (!,;$£€%...)
-    Output Modal: audio
+Input Modality: text with special characters (!,;$£€%...)
+    Output Modality: audio
     """
     request_config = {
         "input": "Wait — really?! That costs $99.99; not £50 (or €45)... wow!",
@@ -104,9 +102,8 @@ def test_customvoice_special_characters(omni_runner, omni_runner_handler) -> Non
 def test_customvoice_acronyms_and_abbreviations(omni_runner, omni_runner_handler) -> None:
     """
     Test text-to-audio with acronyms and abbreviations.
-    Deploy Setting: qwen3_tts_no_async_chunk.yaml + enforce_eager=true
-    Input Modal: text with e.g., i.e., Dr., p.m., acronyms
-    Output Modal: audio
+Input Modality: text with e.g., i.e., Dr., p.m., acronyms
+    Output Modality: audio
     """
     request_config = {
         "input": "The CEO of NASA, e.g. Dr. Smith, will arrive at 3 p.m. i.e. before the Q&A.",
@@ -122,9 +119,8 @@ def test_customvoice_acronyms_and_abbreviations(omni_runner, omni_runner_handler
 def test_customvoice_chinese_text(omni_runner, omni_runner_handler) -> None:
     """
     Test text-to-audio with Chinese language text.
-    Deploy Setting: qwen3_tts_no_async_chunk.yaml + enforce_eager=true
-    Input Modal: Chinese text
-    Output Modal: audio
+Input Modality: Chinese text
+    Output Modality: audio
     Extra Setting: language=Chinese
     """
     request_config = {
@@ -142,12 +138,11 @@ def test_customvoice_chinese_text(omni_runner, omni_runner_handler) -> None:
 def test_customvoice_rejects_empty_input(omni_runner, omni_runner_handler) -> None:
     """
     Negative test: empty input text should be rejected.
-    Deploy Setting: qwen3_tts_no_async_chunk.yaml + enforce_eager=true
-    Input Modal: empty string
-    Expected: ValueError or RuntimeError
+Input Modality: empty string
+    Expected: ValueError
     """
     request_config = {"input": "", "voice": "vivian"}
-    with pytest.raises((ValueError, RuntimeError)):
+    with pytest.raises(ValueError):
         omni_runner_handler.send_audio_speech_request(request_config)
 
 
@@ -159,12 +154,11 @@ def test_customvoice_rejects_empty_input(omni_runner, omni_runner_handler) -> No
 def test_customvoice_rejects_whitespace_only_input(omni_runner, omni_runner_handler) -> None:
     """
     Negative test: whitespace-only input (spaces, tabs, newlines) should be rejected.
-    Deploy Setting: qwen3_tts_no_async_chunk.yaml + enforce_eager=true
-    Input Modal: whitespace/tabs/newlines only
-    Expected: ValueError or RuntimeError
+Input Modality: whitespace/tabs/newlines only
+    Expected: ValueError
     """
     request_config = {"input": "   \t\n  ", "voice": "vivian"}
-    with pytest.raises((ValueError, RuntimeError)):
+    with pytest.raises(ValueError):
         omni_runner_handler.send_audio_speech_request(request_config)
 
 
@@ -175,9 +169,8 @@ def test_customvoice_rejects_whitespace_only_input(omni_runner, omni_runner_hand
 def test_customvoice_handles_very_long_input(omni_runner, omni_runner_handler) -> None:
     """
     Test text-to-audio with very long input text (~5000 chars).
-    Deploy Setting: qwen3_tts_no_async_chunk.yaml + enforce_eager=true
-    Input Modal: long repeated text
-    Output Modal: audio
+Input Modality: long repeated text
+    Output Modality: audio
     Extra Setting: max_new_tokens=512 to cap generation time
     """
     long_text = "This is a sentence that will be repeated many times to create a very long input. " * 60

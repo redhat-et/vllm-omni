@@ -10,6 +10,7 @@ Text-to-image tests use ``send_diffusion_request`` with a prompt and
 :meth:`OmniRunnerHandler.send_diffusion_request` in ``tests.helpers.runtime``.
 """
 
+import numpy as np
 import pytest
 import torch
 from PIL import Image, ImageDraw
@@ -128,7 +129,10 @@ def test_flux2_klein_text_to_image_deterministic(omni_runner_handler: OmniRunner
     images1 = _images_from_response(r1)
     images2 = _images_from_response(r2)
 
-    assert list(images1[0].get_flattened_data()) == list(images2[0].get_flattened_data()), (
+    arr1 = np.array(images1[0])
+    arr2 = np.array(images2[0])
+    assert arr1.shape == arr2.shape, "Images should have the same shape"
+    assert np.array_equal(arr1, arr2), (
         "Same prompt with same seed should produce identical output."
     )
 
@@ -144,10 +148,10 @@ def test_flux2_klein_text_to_image_different_seeds(omni_runner_handler: OmniRunn
     images1 = _images_from_response(r1)
     images2 = _images_from_response(r2)
 
-    different_pixel_count = sum(
-        1 for p1, p2 in zip(images1[0].get_flattened_data(), images2[0].get_flattened_data()) if p1 != p2
-    )
-    assert different_pixel_count > 0, "Different seeds should produce different outputs"
+    arr1 = np.array(images1[0])
+    arr2 = np.array(images2[0])
+    assert arr1.shape == arr2.shape, "Images should have the same shape"
+    assert not np.array_equal(arr1, arr2), "Different seeds should produce different outputs"
 
 
 @pytest.mark.advanced_model
@@ -158,6 +162,10 @@ def test_flux2_klein_text_to_image_multi_output(omni_runner_handler: OmniRunnerH
     assert len(images) == 2, f"Expected 2 images, got {len(images)}"
     for img in images:
         assert_image_valid(img, width=_WIDTH, height=_HEIGHT)
+    arr0 = np.array(images[0])
+    arr1 = np.array(images[1])
+    assert arr0.shape == arr1.shape, "Multi-output images should have the same shape"
+    assert not np.array_equal(arr0, arr1), "Multi-output images should be different"
 
 
 @pytest.mark.advanced_model
@@ -255,7 +263,10 @@ def test_flux2_klein_inpaint_deterministic(omni_runner_handler: OmniRunnerHandle
     images1 = _images_from_response(r1)
     images2 = _images_from_response(r2)
 
-    assert list(images1[0].getdata()) == list(images2[0].getdata()), (
+    arr1 = np.array(images1[0])
+    arr2 = np.array(images2[0])
+    assert arr1.shape == arr2.shape, "Images should have the same shape"
+    assert np.array_equal(arr1, arr2), (
         "Same input with same seed should produce identical output. This is critical for offline/online consistency."
     )
 
@@ -275,5 +286,7 @@ def test_flux2_klein_inpaint_different_seeds_different_output(omni_runner_handle
     images1 = _images_from_response(r1)
     images2 = _images_from_response(r2)
 
-    different_pixel_count = sum(1 for p1, p2 in zip(images1[0].getdata(), images2[0].getdata()) if p1 != p2)
-    assert different_pixel_count > 0, "Different seeds should produce different outputs"
+    arr1 = np.array(images1[0])
+    arr2 = np.array(images2[0])
+    assert arr1.shape == arr2.shape, "Images should have the same shape"
+    assert not np.array_equal(arr1, arr2), "Different seeds should produce different outputs"

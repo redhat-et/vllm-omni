@@ -42,14 +42,14 @@ else:
 test_params = [(model, stage_config) for model in models for stage_config in stage_configs]
 
 
-def get_question(prompt_type="text"):
+def get_prompt(prompt_type: str):
     prompts = {
         "video": "Describe the video briefly.",
         "image": "Describe the image.",
         "audio": "Describe the audio.",
         "text": "What is the capital of the United Kingdom?",
     }
-    return prompts.get(prompt_type, prompts["text"])
+    return prompts[prompt_type]
 
 
 @pytest.mark.advanced_model
@@ -58,7 +58,7 @@ def get_question(prompt_type="text"):
 @pytest.mark.parametrize("omni_runner", test_params, indirect=True)
 def test_text_to_text(omni_runner, omni_runner_handler) -> None:
     """Test generating text from text input"""
-    request_config = {"prompts": get_question("text"), "modalities": ["text"]}
+    request_config = {"prompts": get_prompt("text"), "modalities": ["text"]}
 
     # Test single completion
     omni_runner_handler.send_omni_request(request_config)
@@ -70,7 +70,7 @@ def test_text_to_text(omni_runner, omni_runner_handler) -> None:
 @pytest.mark.parametrize("omni_runner", test_params, indirect=True)
 def test_text_to_audio(omni_runner, omni_runner_handler) -> None:
     """Test processing audio from text input"""
-    request_config = {"prompts": get_question("text"), "modalities": ["audio"]}
+    request_config = {"prompts": get_prompt("text"), "modalities": ["audio"]}
 
     # Test single completion
     omni_runner_handler.send_omni_request(request_config)
@@ -84,7 +84,7 @@ def test_image_to_text(omni_runner, omni_runner_handler) -> None:
     """Test processing image, generating text output."""
     image = generate_synthetic_image(224, 224)["np_array"]
 
-    request_config = {"prompts": get_question("image"), "images": image, "modalities": ["text"]}
+    request_config = {"prompts": get_prompt("image"), "images": image, "modalities": ["text"]}
 
     # Test single completion
     omni_runner_handler.send_omni_request(request_config)
@@ -98,7 +98,7 @@ def test_image_to_audio(omni_runner, omni_runner_handler) -> None:
     """Test processing image, generating audio output."""
     image = generate_synthetic_image(224, 224)["np_array"]
 
-    request_config = {"prompts": get_question("image"), "images": image, "modalities": ["audio"]}
+    request_config = {"prompts": get_prompt("image"), "images": image, "modalities": ["audio"]}
 
     # Test single completion
     omni_runner_handler.send_omni_request(request_config)
@@ -112,7 +112,7 @@ def test_video_to_text(omni_runner, omni_runner_handler) -> None:
     """Test processing video, generating text output."""
     video = generate_synthetic_video(224, 224, 300)["np_array"]
 
-    request_config = {"prompts": get_question("video"), "videos": video, "modalities": ["text"]}
+    request_config = {"prompts": get_prompt("video"), "videos": video, "modalities": ["text"]}
 
     # Test single completion
     omni_runner_handler.send_omni_request(request_config)
@@ -126,7 +126,7 @@ def test_video_to_audio(omni_runner, omni_runner_handler) -> None:
     """Test processing video, generating audio output."""
     video = generate_synthetic_video(224, 224, 300)["np_array"]
 
-    request_config = {"prompts": get_question("video"), "videos": video, "modalities": ["audio"]}
+    request_config = {"prompts": get_prompt("video"), "videos": video, "modalities": ["audio"]}
 
     # Test single completion
     omni_runner_handler.send_omni_request(request_config)

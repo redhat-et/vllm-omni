@@ -132,9 +132,7 @@ def test_flux2_klein_text_to_image_deterministic(omni_runner_handler: OmniRunner
     arr1 = np.array(images1[0])
     arr2 = np.array(images2[0])
     assert arr1.shape == arr2.shape, "Images should have the same shape"
-    assert np.array_equal(arr1, arr2), (
-        "Same prompt with same seed should produce identical output."
-    )
+    assert np.array_equal(arr1, arr2), "Same prompt with same seed should produce identical output."
 
 
 @pytest.mark.advanced_model

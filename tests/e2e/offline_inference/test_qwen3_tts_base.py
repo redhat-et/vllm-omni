@@ -73,7 +73,7 @@ def get_prompt():
 def test_text_to_audio_001(omni_runner, omni_runner_handler) -> None:
     """
     Test text input processing and audio output via offline Omni runner.
-Input Modality: text
+    Input Modality: text
     Output Modality: audio
     Input Setting: stream=False
     Extra Setting: task_type=Base, voice=clone, ref_audio/ref_text provided
@@ -96,7 +96,7 @@ Input Modality: text
 def test_base_voice_clone_special_characters(omni_runner, omni_runner_handler) -> None:
     """
     Test voice cloning with special characters and punctuation in input text.
-Input Modality: text with special characters (!,$,—,...)
+    Input Modality: text with special characters (!,$,—,...)
     Output Modality: audio
     Extra Setting: task_type=Base, voice=clone, ref_audio/ref_text provided
     """
@@ -117,7 +117,7 @@ Input Modality: text with special characters (!,$,—,...)
 def test_base_voice_clone_with_disfluent_text(omni_runner, omni_runner_handler) -> None:
     """
     Test voice cloning with disfluent/malformed input text (filler words, repetition).
-Input Modality: text with disfluencies and filler words
+    Input Modality: text with disfluencies and filler words
     Output Modality: audio
     Extra Setting: task_type=Base, voice=clone, ref_audio/ref_text provided
     """
@@ -138,7 +138,7 @@ Input Modality: text with disfluencies and filler words
 def test_base_rejects_empty_input(omni_runner, omni_runner_handler) -> None:
     """
     Negative test: empty input text should be rejected even with valid ref_audio.
-Input Modality: empty string
+    Input Modality: empty string
     Expected: ValueError
     """
     request_config = {
@@ -160,7 +160,7 @@ Input Modality: empty string
 def test_base_rejects_missing_ref_audio(omni_runner, omni_runner_handler) -> None:
     """
     Negative test: Base task without ref_audio or ref_text should be rejected.
-Input Modality: valid text, task_type=Base, no ref_audio/ref_text
+    Input Modality: valid text, task_type=Base, no ref_audio/ref_text
     Expected: ValueError
     """
     request_config = {
@@ -179,7 +179,7 @@ Input Modality: valid text, task_type=Base, no ref_audio/ref_text
 def test_base_rejects_missing_ref_text(omni_runner, omni_runner_handler) -> None:
     """
     Negative test: Base task with ref_audio but no ref_text should be rejected.
-Input Modality: valid text, task_type=Base, ref_audio provided, no ref_text
+    Input Modality: valid text, task_type=Base, ref_audio provided, no ref_text
     Expected: ValueError
     """
     request_config = {

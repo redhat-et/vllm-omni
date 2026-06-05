@@ -69,7 +69,7 @@ def get_prompt():
 def test_text_to_audio_001(omni_runner, omni_runner_handler) -> None:
     """
     Test text input processing and audio output via offline Omni runner.
-Input Modality: text
+    Input Modality: text
     Output Modality: audio
     Input Setting: stream=False
     Datasets: few requests
@@ -85,7 +85,7 @@ Input Modality: text
 def test_customvoice_special_characters(omni_runner, omni_runner_handler) -> None:
     """
     Test text-to-audio with heavy punctuation and special characters.
-Input Modality: text with special characters (!,;$£€%...)
+    Input Modality: text with special characters (!,;$£€%...)
     Output Modality: audio
     """
     request_config = {
@@ -102,7 +102,7 @@ Input Modality: text with special characters (!,;$£€%...)
 def test_customvoice_acronyms_and_abbreviations(omni_runner, omni_runner_handler) -> None:
     """
     Test text-to-audio with acronyms and abbreviations.
-Input Modality: text with e.g., i.e., Dr., p.m., acronyms
+    Input Modality: text with e.g., i.e., Dr., p.m., acronyms
     Output Modality: audio
     """
     request_config = {
@@ -119,7 +119,7 @@ Input Modality: text with e.g., i.e., Dr., p.m., acronyms
 def test_customvoice_chinese_text(omni_runner, omni_runner_handler) -> None:
     """
     Test text-to-audio with Chinese language text.
-Input Modality: Chinese text
+    Input Modality: Chinese text
     Output Modality: audio
     Extra Setting: language=Chinese
     """
@@ -138,7 +138,7 @@ Input Modality: Chinese text
 def test_customvoice_rejects_empty_input(omni_runner, omni_runner_handler) -> None:
     """
     Negative test: empty input text should be rejected.
-Input Modality: empty string
+    Input Modality: empty string
     Expected: ValueError
     """
     request_config = {"input": "", "voice": "vivian"}
@@ -154,7 +154,7 @@ Input Modality: empty string
 def test_customvoice_rejects_whitespace_only_input(omni_runner, omni_runner_handler) -> None:
     """
     Negative test: whitespace-only input (spaces, tabs, newlines) should be rejected.
-Input Modality: whitespace/tabs/newlines only
+    Input Modality: whitespace/tabs/newlines only
     Expected: ValueError
     """
     request_config = {"input": "   \t\n  ", "voice": "vivian"}
@@ -169,7 +169,7 @@ Input Modality: whitespace/tabs/newlines only
 def test_customvoice_handles_very_long_input(omni_runner, omni_runner_handler) -> None:
     """
     Test text-to-audio with very long input text (~5000 chars).
-Input Modality: long repeated text
+    Input Modality: long repeated text
     Output Modality: audio
     Extra Setting: max_new_tokens=512 to cap generation time
     """

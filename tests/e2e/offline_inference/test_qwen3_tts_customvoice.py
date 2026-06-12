@@ -78,56 +78,37 @@ def test_text_to_audio_001(omni_runner, omni_runner_handler) -> None:
     omni_runner_handler.send_audio_speech_request(request_config)
 
 
-@pytest.mark.advanced_model
-@pytest.mark.tts
-@hardware_test(res={"cuda": "L4"}, num_cards=1)
-@pytest.mark.parametrize("omni_runner", tts_server_params, indirect=True)
-def test_customvoice_special_characters(omni_runner, omni_runner_handler) -> None:
-    """
-    Test text-to-audio with heavy punctuation and special characters.
-    Input Modality: text with special characters (!,;$£€%...)
-    Output Modality: audio
-    """
-    request_config = {
-        "input": "Wait — really?! That costs $99.99; not £50 (or €45)... wow!",
-        "voice": "vivian",
-    }
-    omni_runner_handler.send_audio_speech_request(request_config)
+CUSTOMVOICE_SMOKE_INPUTS = [
+    pytest.param(
+        {"input": "Wait — really?! That costs $99.99; not £50 (or €45)... wow!",
+         "voice": "vivian"},
+        id="special-characters",
+    ),
+    pytest.param(
+        {"input": "The CEO of NASA, e.g. Dr. Smith, will arrive at 3 p.m. i.e. before the Q&A.",
+         "voice": "vivian"},
+        id="acronyms",
+    ),
+    pytest.param(
+        {"input": "北京是中国的首都，有着悠久的历史和丰富的文化。",
+         "voice": "vivian", "language": "Chinese"},
+        id="chinese-text",
+    ),
+    pytest.param(
+        {"input": "This is a sentence that will be repeated many times to create a very long input. " * 60,
+         "voice": "vivian", "max_new_tokens": 512},
+        id="long-input",
+    ),
+]
 
 
 @pytest.mark.advanced_model
 @pytest.mark.tts
 @hardware_test(res={"cuda": "L4"}, num_cards=1)
 @pytest.mark.parametrize("omni_runner", tts_server_params, indirect=True)
-def test_customvoice_acronyms_and_abbreviations(omni_runner, omni_runner_handler) -> None:
-    """
-    Test text-to-audio with acronyms and abbreviations.
-    Input Modality: text with e.g., i.e., Dr., p.m., acronyms
-    Output Modality: audio
-    """
-    request_config = {
-        "input": "The CEO of NASA, e.g. Dr. Smith, will arrive at 3 p.m. i.e. before the Q&A.",
-        "voice": "vivian",
-    }
-    omni_runner_handler.send_audio_speech_request(request_config)
-
-
-@pytest.mark.advanced_model
-@pytest.mark.tts
-@hardware_test(res={"cuda": "L4"}, num_cards=1)
-@pytest.mark.parametrize("omni_runner", tts_server_params, indirect=True)
-def test_customvoice_chinese_text(omni_runner, omni_runner_handler) -> None:
-    """
-    Test text-to-audio with Chinese language text.
-    Input Modality: Chinese text
-    Output Modality: audio
-    Extra Setting: language=Chinese
-    """
-    request_config = {
-        "input": "北京是中国的首都，有着悠久的历史和丰富的文化。",
-        "voice": "vivian",
-        "language": "Chinese",
-    }
+@pytest.mark.parametrize("request_config", CUSTOMVOICE_SMOKE_INPUTS)
+def test_customvoice_smoke(omni_runner, omni_runner_handler, request_config) -> None:
+    """Smoke test: verify the pipeline produces audio without crashing."""
     omni_runner_handler.send_audio_speech_request(request_config)
 
 
@@ -160,23 +141,3 @@ def test_customvoice_rejects_whitespace_only_input(omni_runner, omni_runner_hand
     request_config = {"input": "   \t\n  ", "voice": "vivian"}
     with pytest.raises(ValueError):
         omni_runner_handler.send_audio_speech_request(request_config)
-
-
-@pytest.mark.advanced_model
-@pytest.mark.tts
-@hardware_test(res={"cuda": "L4"}, num_cards=1)
-@pytest.mark.parametrize("omni_runner", tts_server_params, indirect=True)
-def test_customvoice_handles_very_long_input(omni_runner, omni_runner_handler) -> None:
-    """
-    Test text-to-audio with very long input text (~5000 chars).
-    Input Modality: long repeated text
-    Output Modality: audio
-    Extra Setting: max_new_tokens=512 to cap generation time
-    """
-    long_text = "This is a sentence that will be repeated many times to create a very long input. " * 60
-    request_config = {
-        "input": long_text,
-        "voice": "vivian",
-        "max_new_tokens": 512,
-    }
-    omni_runner_handler.send_audio_speech_request(request_config)

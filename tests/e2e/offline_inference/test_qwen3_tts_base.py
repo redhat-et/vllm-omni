@@ -89,40 +89,27 @@ def test_text_to_audio_001(omni_runner, omni_runner_handler) -> None:
     omni_runner_handler.send_audio_speech_request(request_config)
 
 
-@pytest.mark.advanced_model
-@pytest.mark.tts
-@hardware_test(res={"cuda": "L4"}, num_cards=1)
-@pytest.mark.parametrize("omni_runner", tts_server_params, indirect=True)
-def test_base_voice_clone_special_characters(omni_runner, omni_runner_handler) -> None:
-    """
-    Test voice cloning with special characters and punctuation in input text.
-    Input Modality: text with special characters (!,$,—,...)
-    Output Modality: audio
-    Extra Setting: task_type=Base, voice=clone, ref_audio/ref_text provided
-    """
-    request_config = {
-        "input": "Hello! Can you believe it? The price is $19.99 — what a deal...",
-        "task_type": "Base",
-        "voice": "clone",
-        "ref_audio": REF_AUDIO_URL,
-        "ref_text": REF_TEXT,
-    }
-    omni_runner_handler.send_audio_speech_request(request_config)
+BASE_SMOKE_INPUTS = [
+    pytest.param(
+        "Hello! Can you believe it? The price is $19.99 — what a deal...",
+        id="special-characters",
+    ),
+    pytest.param(
+        "Uh um so like, ya know, the the the thing is... mhmm, kinda sorta maybe?!",
+        id="disfluent-text",
+    ),
+]
 
 
 @pytest.mark.advanced_model
 @pytest.mark.tts
 @hardware_test(res={"cuda": "L4"}, num_cards=1)
 @pytest.mark.parametrize("omni_runner", tts_server_params, indirect=True)
-def test_base_voice_clone_with_disfluent_text(omni_runner, omni_runner_handler) -> None:
-    """
-    Test voice cloning with disfluent/malformed input text (filler words, repetition).
-    Input Modality: text with disfluencies and filler words
-    Output Modality: audio
-    Extra Setting: task_type=Base, voice=clone, ref_audio/ref_text provided
-    """
+@pytest.mark.parametrize("input_text", BASE_SMOKE_INPUTS)
+def test_base_voice_clone_smoke(omni_runner, omni_runner_handler, input_text) -> None:
+    """Smoke test: verify Base voice-clone pipeline produces audio without crashing."""
     request_config = {
-        "input": "Uh um so like, ya know, the the the thing is... mhmm, kinda sorta maybe?!",
+        "input": input_text,
         "task_type": "Base",
         "voice": "clone",
         "ref_audio": REF_AUDIO_URL,

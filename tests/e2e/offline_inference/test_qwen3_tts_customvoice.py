@@ -80,23 +80,23 @@ def test_text_to_audio_001(omni_runner, omni_runner_handler) -> None:
 
 CUSTOMVOICE_SMOKE_INPUTS = [
     pytest.param(
-        {"input": "Wait — really?! That costs $99.99; not £50 (or €45)... wow!",
-         "voice": "vivian"},
+        {"input": "Wait — really?! That costs $99.99; not £50 (or €45)... wow!", "voice": "vivian"},
         id="special-characters",
     ),
     pytest.param(
-        {"input": "The CEO of NASA, e.g. Dr. Smith, will arrive at 3 p.m. i.e. before the Q&A.",
-         "voice": "vivian"},
+        {"input": "The CEO of NASA, e.g. Dr. Smith, will arrive at 3 p.m. i.e. before the Q&A.", "voice": "vivian"},
         id="acronyms",
     ),
     pytest.param(
-        {"input": "北京是中国的首都，有着悠久的历史和丰富的文化。",
-         "voice": "vivian", "language": "Chinese"},
+        {"input": "北京是中国的首都，有着悠久的历史和丰富的文化。", "voice": "vivian", "language": "Chinese"},
         id="chinese-text",
     ),
     pytest.param(
-        {"input": "This is a sentence that will be repeated many times to create a very long input. " * 60,
-         "voice": "vivian", "max_new_tokens": 512},
+        {
+            "input": "This is a sentence that will be repeated many times to create a very long input. " * 60,
+            "voice": "vivian",
+            "max_new_tokens": 512,
+        },
         id="long-input",
     ),
 ]

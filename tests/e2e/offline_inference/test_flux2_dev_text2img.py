@@ -29,7 +29,7 @@ _OMNI_RUNNER_PARAM = (
 )
 
 pytestmark = [
-    pytest.mark.full_model,
+    pytest.mark.advanced_model,
     pytest.mark.diffusion,
     pytest.mark.parametrize("omni_runner", [_OMNI_RUNNER_PARAM], indirect=True),
 ]

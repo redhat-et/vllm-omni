@@ -10,6 +10,7 @@ seed sensitivity, multi-output, CFG) and negative-path validation (invalid
 dimensions, empty prompt, bad inference steps).
 """
 
+import numpy as np
 import pytest
 
 from tests.helpers.assertions import assert_image_valid
@@ -85,9 +86,10 @@ def test_flux2_dev_text_to_image_deterministic(omni_runner_handler: OmniRunnerHa
     images1 = _images_from_response(r1)
     images2 = _images_from_response(r2)
 
-    assert list(images1[0].get_flattened_data()) == list(images2[0].get_flattened_data()), (
-        "Same prompt with same seed should produce identical output."
-    )
+    arr1 = np.array(images1[0])
+    arr2 = np.array(images2[0])
+    assert arr1.shape == arr2.shape, "Images should have the same shape"
+    assert np.array_equal(arr1, arr2), "Same prompt with same seed should produce identical output."
 
 
 @hardware_test(res={"cuda": "H100"})
@@ -100,10 +102,10 @@ def test_flux2_dev_text_to_image_different_seeds(omni_runner_handler: OmniRunner
     images1 = _images_from_response(r1)
     images2 = _images_from_response(r2)
 
-    different_pixel_count = sum(
-        1 for p1, p2 in zip(images1[0].get_flattened_data(), images2[0].get_flattened_data()) if p1 != p2
-    )
-    assert different_pixel_count > 0, "Different seeds should produce different outputs"
+    arr1 = np.array(images1[0])
+    arr2 = np.array(images2[0])
+    assert arr1.shape == arr2.shape, "Images should have the same shape"
+    assert not np.array_equal(arr1, arr2), "Different seeds should produce different outputs"
 
 
 @hardware_test(res={"cuda": "H100"})
@@ -113,6 +115,10 @@ def test_flux2_dev_text_to_image_multi_output(omni_runner_handler: OmniRunnerHan
     assert len(images) == 2, f"Expected 2 images, got {len(images)}"
     for img in images:
         assert_image_valid(img, width=_WIDTH, height=_HEIGHT)
+    arr0 = np.array(images[0])
+    arr1 = np.array(images[1])
+    assert arr0.shape == arr1.shape, "Multi-output images should have the same shape"
+    assert not np.array_equal(arr0, arr1), "Multi-output images should be different"
 
 
 @hardware_test(res={"cuda": "H100"})

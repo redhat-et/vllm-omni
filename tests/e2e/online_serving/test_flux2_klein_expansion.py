@@ -14,6 +14,7 @@ import httpx
 import pytest
 from PIL import Image, ImageDraw
 
+from tests.helpers.mark import hardware_marks
 from tests.helpers.runtime import OmniServer, OmniServerParams
 
 pytestmark = [pytest.mark.full_model, pytest.mark.diffusion]
@@ -24,15 +25,17 @@ _HEIGHT = 512
 _WIDTH = 512
 _NUM_INFERENCE_STEPS = 4
 
+SINGLE_CARD_MARKS = hardware_marks(res={"cuda": "L4"}, num_cards=1)
+
 
 def _get_diffusion_feature_cases(model: str):
     return [
         pytest.param(
             OmniServerParams(
                 model=model,
-                server_args=["--tensor-parallel-size", "2"],
             ),
-            id="tp2_basic",
+            id="default",
+            marks=SINGLE_CARD_MARKS,
         ),
     ]
 

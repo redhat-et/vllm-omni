@@ -24,14 +24,8 @@ LONG_VIDEO_HEIGHT = 224
 LONG_VIDEO_NUM_FRAMES = 3600
 LONG_AUDIO_DURATION = 120
 
-test_params = [
-    pytest.param(
-        OmniServerParams(
-            model=MODEL,
-            stage_config_path=STAGE_CONFIG_PATH
-        )
-    )
-]
+test_params = [pytest.param(OmniServerParams(model=MODEL, stage_config_path=STAGE_CONFIG_PATH))]
+
 
 def get_system_prompt():
     return {
@@ -48,11 +42,14 @@ def get_system_prompt():
         ],
     }
 
+
 def get_text_only_prompt():
     return "What is the capital of China?"
 
+
 def get_prompt():
     return "Analyse the audio, image or video provided"
+
 
 @pytest.mark.omni
 @pytest.mark.slow
@@ -71,6 +68,7 @@ def test_analyse_text_input(omni_server, openai_client):
 
     openai_client.send_omni_request(request_config)
 
+
 @pytest.mark.omni
 @pytest.mark.slow
 @pytest.mark.parametrize("omni_server", test_params, indirect=True)
@@ -88,6 +86,7 @@ def test_analyse_prompt_without_attached_media(omni_server, openai_client):
 
     openai_client.send_omni_request(request_config)
 
+
 @pytest.mark.omni
 @pytest.mark.slow
 @pytest.mark.parametrize("omni_server", test_params, indirect=True)
@@ -97,7 +96,9 @@ def test_analyse_audio_input(omni_server, openai_client):
     Input Modal: audio
     """
     audio_data_url = f"data:audio/wav;base64,{generate_synthetic_audio(5, 1)['base64']}"
-    messages = dummy_messages_from_mix_data(system_prompt=get_system_prompt(), content_text=get_prompt(), audio_data_url=audio_data_url)
+    messages = dummy_messages_from_mix_data(
+        system_prompt=get_system_prompt(), content_text=get_prompt(), audio_data_url=audio_data_url
+    )
 
     request_config = {
         "model": omni_server.model,
@@ -105,6 +106,7 @@ def test_analyse_audio_input(omni_server, openai_client):
     }
 
     openai_client.send_omni_request(request_config)
+
 
 @pytest.mark.omni
 @pytest.mark.slow
@@ -115,7 +117,9 @@ def test_analyse_long_audio_input(omni_server, openai_client):
     Input Modal: long audio
     """
     audio_data_url = f"data:audio/wav;base64,{generate_synthetic_audio(LONG_AUDIO_DURATION, 1)['base64']}"
-    messages = dummy_messages_from_mix_data(system_prompt=get_system_prompt(), content_text=get_prompt(), audio_data_url=audio_data_url)
+    messages = dummy_messages_from_mix_data(
+        system_prompt=get_system_prompt(), content_text=get_prompt(), audio_data_url=audio_data_url
+    )
 
     request_config = {
         "model": omni_server.model,
@@ -123,6 +127,7 @@ def test_analyse_long_audio_input(omni_server, openai_client):
     }
 
     openai_client.send_omni_request(request_config)
+
 
 @pytest.mark.omni
 @pytest.mark.slow
@@ -133,7 +138,9 @@ def test_analyse_image_input(omni_server, openai_client):
     Input Modal: image
     """
     image_data_url = f"data:image/jpeg;base64,{generate_synthetic_image(IMAGE_WIDTH, IMAGE_HEIGHT)['base64']}"
-    messages = dummy_messages_from_mix_data(system_prompt=get_system_prompt(), content_text=get_prompt(), image_data_url=image_data_url)
+    messages = dummy_messages_from_mix_data(
+        system_prompt=get_system_prompt(), content_text=get_prompt(), image_data_url=image_data_url
+    )
 
     request_config = {
         "model": omni_server.model,
@@ -141,6 +148,7 @@ def test_analyse_image_input(omni_server, openai_client):
     }
 
     openai_client.send_omni_request(request_config)
+
 
 @pytest.mark.omni
 @pytest.mark.slow
@@ -150,8 +158,12 @@ def test_analyse_large_image_input(omni_server, openai_client):
     """
     Input Modal: large image
     """
-    image_data_url = f"data:image/jpeg;base64,{generate_synthetic_image(LARGE_IMAGE_WIDTH, LARGE_IMAGE_HEIGHT)['base64']}"
-    messages = dummy_messages_from_mix_data(system_prompt=get_system_prompt(), content_text=get_prompt(), image_data_url=image_data_url)
+    image_data_url = (
+        f"data:image/jpeg;base64,{generate_synthetic_image(LARGE_IMAGE_WIDTH, LARGE_IMAGE_HEIGHT)['base64']}"
+    )
+    messages = dummy_messages_from_mix_data(
+        system_prompt=get_system_prompt(), content_text=get_prompt(), image_data_url=image_data_url
+    )
 
     request_config = {
         "model": omni_server.model,
@@ -159,6 +171,7 @@ def test_analyse_large_image_input(omni_server, openai_client):
     }
 
     openai_client.send_omni_request(request_config)
+
 
 @pytest.mark.omni
 @pytest.mark.slow
@@ -168,8 +181,12 @@ def test_analyse_video_input(omni_server, openai_client):
     """
     Input Modal: video
     """
-    video_data_url = f"data:video/mp4;base64,{generate_synthetic_video(VIDEO_WIDTH, VIDEO_HEIGHT, NUM_VIDEO_FRAMES)['base64']}"
-    messages = dummy_messages_from_mix_data(system_prompt=get_system_prompt(), content_text=get_prompt(), video_data_url=video_data_url)
+    video_data_url = (
+        f"data:video/mp4;base64,{generate_synthetic_video(VIDEO_WIDTH, VIDEO_HEIGHT, NUM_VIDEO_FRAMES)['base64']}"
+    )
+    messages = dummy_messages_from_mix_data(
+        system_prompt=get_system_prompt(), content_text=get_prompt(), video_data_url=video_data_url
+    )
 
     request_config = {
         "model": omni_server.model,
@@ -177,6 +194,7 @@ def test_analyse_video_input(omni_server, openai_client):
     }
 
     openai_client.send_omni_request(request_config)
+
 
 @pytest.mark.omni
 @pytest.mark.slow
@@ -187,7 +205,9 @@ def test_analyse_long_video_input(omni_server, openai_client):
     Input Modal: long video
     """
     video_data_url = f"data:video/mp4;base64,{generate_synthetic_video(LONG_VIDEO_WIDTH, LONG_VIDEO_HEIGHT, LONG_VIDEO_NUM_FRAMES)['base64']}"
-    messages = dummy_messages_from_mix_data(system_prompt=get_system_prompt(), content_text=get_prompt(), video_data_url=video_data_url)
+    messages = dummy_messages_from_mix_data(
+        system_prompt=get_system_prompt(), content_text=get_prompt(), video_data_url=video_data_url
+    )
 
     request_config = {
         "model": omni_server.model,
@@ -195,6 +215,7 @@ def test_analyse_long_video_input(omni_server, openai_client):
     }
 
     openai_client.send_omni_request(request_config)
+
 
 @pytest.mark.omni
 @pytest.mark.slow
@@ -205,7 +226,9 @@ def test_analyse_video_with_audio_input(omni_server, openai_client):
     Input Modal: video with audio
     """
     video_data_url = f"data:video/mp4;base64,{generate_synthetic_video(VIDEO_WIDTH, VIDEO_HEIGHT, NUM_VIDEO_FRAMES, embed_audio=True)['base64']}"
-    messages = dummy_messages_from_mix_data(system_prompt=get_system_prompt(), content_text=get_prompt(), video_data_url=video_data_url)
+    messages = dummy_messages_from_mix_data(
+        system_prompt=get_system_prompt(), content_text=get_prompt(), video_data_url=video_data_url
+    )
 
     request_config = {
         "model": omni_server.model,

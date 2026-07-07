@@ -75,6 +75,23 @@ def test_analyse_text_input(omni_server, openai_client):
 @pytest.mark.slow
 @pytest.mark.parametrize("omni_server", test_params, indirect=True)
 @hardware_test(res={"cuda": "H100"}, num_cards=2)
+def test_analyse_prompt_without_attached_media(omni_server, openai_client):
+    """
+    Input Modal: text asking to describe media provided but it is absent
+    """
+    messages = dummy_messages_from_mix_data(system_prompt=get_system_prompt(), content_text=get_prompt())
+
+    request_config = {
+        "model": omni_server.model,
+        "messages": messages,
+    }
+
+    openai_client.send_omni_request(request_config)
+
+@pytest.mark.omni
+@pytest.mark.slow
+@pytest.mark.parametrize("omni_server", test_params, indirect=True)
+@hardware_test(res={"cuda": "H100"}, num_cards=2)
 def test_analyse_audio_input(omni_server, openai_client):
     """
     Input Modal: audio
@@ -112,6 +129,9 @@ def test_analyse_long_audio_input(omni_server, openai_client):
 @pytest.mark.parametrize("omni_server", test_params, indirect=True)
 @hardware_test(res={"cuda": "H100"}, num_cards=2)
 def test_analyse_image_input(omni_server, openai_client):
+    """
+    Input Modal: image
+    """
     image_data_url = f"data:image/jpeg;base64,{generate_synthetic_image(IMAGE_WIDTH, IMAGE_HEIGHT)['base64']}"
     messages = dummy_messages_from_mix_data(system_prompt=get_system_prompt(), content_text=get_prompt(), image_data_url=image_data_url)
 
@@ -127,6 +147,9 @@ def test_analyse_image_input(omni_server, openai_client):
 @pytest.mark.parametrize("omni_server", test_params, indirect=True)
 @hardware_test(res={"cuda": "H100"}, num_cards=2)
 def test_analyse_large_image_input(omni_server, openai_client):
+    """
+    Input Modal: large image
+    """
     image_data_url = f"data:image/jpeg;base64,{generate_synthetic_image(LARGE_IMAGE_WIDTH, LARGE_IMAGE_HEIGHT)['base64']}"
     messages = dummy_messages_from_mix_data(system_prompt=get_system_prompt(), content_text=get_prompt(), image_data_url=image_data_url)
 
@@ -142,6 +165,9 @@ def test_analyse_large_image_input(omni_server, openai_client):
 @pytest.mark.parametrize("omni_server", test_params, indirect=True)
 @hardware_test(res={"cuda": "H100"}, num_cards=2)
 def test_analyse_video_input(omni_server, openai_client):
+    """
+    Input Modal: video
+    """
     video_data_url = f"data:video/mp4;base64,{generate_synthetic_video(VIDEO_WIDTH, VIDEO_HEIGHT, NUM_VIDEO_FRAMES)['base64']}"
     messages = dummy_messages_from_mix_data(system_prompt=get_system_prompt(), content_text=get_prompt(), video_data_url=video_data_url)
 
@@ -157,6 +183,9 @@ def test_analyse_video_input(omni_server, openai_client):
 @pytest.mark.parametrize("omni_server", test_params, indirect=True)
 @hardware_test(res={"cuda": "H100"}, num_cards=2)
 def test_analyse_long_video_input(omni_server, openai_client):
+    """
+    Input Modal: long video
+    """
     video_data_url = f"data:video/mp4;base64,{generate_synthetic_video(LONG_VIDEO_WIDTH, LONG_VIDEO_HEIGHT, LONG_VIDEO_NUM_FRAMES)['base64']}"
     messages = dummy_messages_from_mix_data(system_prompt=get_system_prompt(), content_text=get_prompt(), video_data_url=video_data_url)
 
@@ -172,6 +201,9 @@ def test_analyse_long_video_input(omni_server, openai_client):
 @pytest.mark.parametrize("omni_server", test_params, indirect=True)
 @hardware_test(res={"cuda": "H100"}, num_cards=2)
 def test_analyse_video_with_audio_input(omni_server, openai_client):
+    """
+    Input Modal: video with audio
+    """
     video_data_url = f"data:video/mp4;base64,{generate_synthetic_video(VIDEO_WIDTH, VIDEO_HEIGHT, NUM_VIDEO_FRAMES, embed_audio=True)['base64']}"
     messages = dummy_messages_from_mix_data(system_prompt=get_system_prompt(), content_text=get_prompt(), video_data_url=video_data_url)
 

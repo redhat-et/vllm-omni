@@ -119,9 +119,10 @@ def run_e2e():
     if args.lang:
         mm_processor_kwargs["lang"] = args.lang
     if args.instruct:
-        instruction_validation_error = validate_instruction(args.instruct)
-        if instruction_validation_error is not None:
-            raise ValueError(instruction_validation_error)
+        try:
+            validate_instruction(args.instruct)
+        except Warning as w:
+            print(f"Warning: {w}")
         mm_processor_kwargs["instruct"] = prepare_instruct(args.instruct)
 
     prompts = {"prompt": args.text}

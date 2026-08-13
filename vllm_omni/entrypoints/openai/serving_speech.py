@@ -3440,10 +3440,11 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         try:
             # Assume that this will follow the same pattern of adapter.validate and adapter.build
             # used in _prepare_speech_generation once all RFC is implemented
-            validation_error = self._adapter.validate(request)
-            if validation_error:
-                raise ValueError(validation_error)
+            self._adapter.validate(request)
+        except Warning as w:
+            logger.warning("Warning: %s", w)
 
+        try:
             if not request.input or not request.input.strip():
                 raise ValueError("Input text cannot be empty")
 

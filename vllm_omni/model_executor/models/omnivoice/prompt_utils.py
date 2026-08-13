@@ -3,7 +3,6 @@
 
 import difflib
 import re
-from typing import Any
 
 from vllm_omni.model_executor.models.omnivoice.instruct_constants import (
     _INSTRUCT_ALL_VALID,
@@ -16,7 +15,7 @@ from vllm_omni.model_executor.models.omnivoice.instruct_constants import (
 )
 
 
-def validate_instruction(instruct: Any) -> str | None:
+def validate_instruction(instruct):
     """
     Based on original instruct validation at https://github.com/k2-fsa/OmniVoice/blob/38e992bc60f85548faeb77e8fa70158ba71deb30/omnivoice/models/omnivoice.py#L1492
     """
@@ -45,27 +44,27 @@ def validate_instruction(instruct: Any) -> str | None:
                 lines.append(f"  '{raw}' -> '{n}' (unsupported; did you mean '{sug}'?)")
             else:
                 lines.append(f"  '{raw}' -> '{n}' (unsupported)")
-        err = (
-            f"Unsupported instruct items found in {instruct_str}:\n"
+        warning = (
+            f"Unsupported instruct items found in '{instruct_str}':\n"
             + "\n".join(lines)
-            + "\n\nValid English items: "
+            + "\nValid English items: "
             + ", ".join(sorted(_INSTRUCT_VALID_EN))
             + "\nValid Chinese items: "
             + "，".join(sorted(_INSTRUCT_VALID_ZH))
-            + "\n\nTip: Use only English or only Chinese instructs. "
+            + "\nTip: Use only English or only Chinese instructs. "
             "English instructs should use comma + space (e.g. "
             "'male, indian accent'),\nChinese instructs should use full-width "
             "comma (e.g. '男，河南话')."
         )
-        return err
+        raise SyntaxWarning(warning)
 
     # --- Language consistency: dialect forces Chinese, accent forces English ---
     if has_dialect(normalised) and has_accent(normalised):
-        err = (
+        warning = (
             "Cannot mix Chinese dialect and English accent in a single instruct"
             + "Dialects are for Chinese speech, accents for English speech."
         )
-        return err
+        raise SyntaxWarning(warning)
 
     # --- Unify to single language ---
     normalised = unify_language(normalised)
@@ -80,14 +79,12 @@ def validate_instruction(instruct: Any) -> str | None:
         parts = []
         for group in conflicts:
             parts.append(" vs ".join(f"'{x}'" for x in group))
-        err = (
+        warning = (
             "Conflicting instruct items within the same category: "
             + "; ".join(parts)
             + ". Each category (gender, age, pitch, style, accent, dialect) allows at most one item."
         )
-        return err
-
-    return None
+        raise SyntaxWarning(warning)
 
 
 def raw_items(instruct_str: str) -> list:

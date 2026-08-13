@@ -27,9 +27,7 @@ class OmniVoiceAdapter(ARTTSAdapter):
         if not request.input or not request.input.strip():
             return "Input text cannot be empty"
 
-        instruction_validation_error = validate_instruction(request.instructions)
-        if instruction_validation_error is not None:
-            return instruction_validation_error
+        validate_instruction(request.instructions)
 
         return self.ctx.server._apply_uploaded_speaker(request)
 

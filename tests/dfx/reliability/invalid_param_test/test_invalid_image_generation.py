@@ -123,7 +123,6 @@ def _minimal_images_gen_json(omni_server: OmniServer) -> dict[str, object]:
         ),
     ],
 )
-@pytest.mark.parametrize("omni_server", _PARAMS, indirect=True)
 def test_images_generations_invalid_requests(
     omni_server: OmniServer,
     openai_client: OpenAIClientHandler,

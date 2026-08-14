@@ -137,7 +137,6 @@ def _chat_completions_request_without_expectations(omni_server: OmniServer, case
         ),
     ],
 )
-@pytest.mark.parametrize("omni_server", _QWEN3_OMNI_SERVER, indirect=True)
 def test_chat_completions_invalid_requests(
     omni_server: OmniServer,
     openai_client: OpenAIClientHandler,
@@ -171,7 +170,6 @@ _VIDEO_CHAT_WS_SESSION_MODALITIES_SCALAR = object()
         ),
     ],
 )
-@pytest.mark.parametrize("omni_server", _QWEN3_OMNI_SERVER, indirect=True)
 def test_video_chat_stream_invalid_requests(
     omni_server: OmniServer,
     openai_client: OpenAIClientHandler,
@@ -240,7 +238,6 @@ _REALTIME_WS_INVALID_AUDIO_APPEND = object()
         ),
     ],
 )
-@pytest.mark.parametrize("omni_server", _QWEN3_OMNI_SERVER, indirect=True)
 def test_realtime_invalid_requests(
     omni_server: OmniServer,
     openai_client: OpenAIClientHandler,

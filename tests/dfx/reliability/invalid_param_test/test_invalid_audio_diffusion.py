@@ -92,7 +92,6 @@ _PARAMS = [
         ),
     ],
 )
-@pytest.mark.parametrize("omni_server", _PARAMS, indirect=True)
 def test_audio_generate_invalid_field_values(
     omni_server: OmniServer,
     openai_client: OpenAIClientHandler,
@@ -106,7 +105,6 @@ def test_audio_generate_invalid_field_values(
     )
 
 
-@pytest.mark.parametrize("omni_server", _PARAMS, indirect=True)
 def test_audio_generate_missing_input(omni_server: OmniServer, openai_client: OpenAIClientHandler) -> None:
     openai_client.send_audio_generate_http_request(
         {

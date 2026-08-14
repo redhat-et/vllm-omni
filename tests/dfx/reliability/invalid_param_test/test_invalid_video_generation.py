@@ -51,7 +51,6 @@ def _minimal_video_form_data() -> dict[str, str]:
         ),
     ],
 )
-@pytest.mark.parametrize("omni_server", _WAN_T2V, indirect=True)
 def test_post_videos_invalid_requests(
     omni_server: OmniServer,
     openai_client: OpenAIClientHandler,
@@ -82,7 +81,6 @@ def test_post_videos_invalid_requests(
         ),
     ],
 )
-@pytest.mark.parametrize("omni_server", _WAN_T2V, indirect=True)
 def test_post_videos_sync_invalid_requests(
     omni_server: OmniServer,
     openai_client: OpenAIClientHandler,
@@ -108,7 +106,6 @@ def test_post_videos_sync_invalid_requests(
         pytest.param({"order": "newest"}, ("order", "literal_error", "asc", "desc"), id="invalid_order"),
     ],
 )
-@pytest.mark.parametrize("omni_server", _WAN_T2V, indirect=True)
 def test_get_videos_list_invalid_requests(
     omni_server: OmniServer,
     openai_client: OpenAIClientHandler,
@@ -125,7 +122,6 @@ def test_get_videos_list_invalid_requests(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("omni_server", _WAN_T2V, indirect=True)
 def test_get_video_invalid_requests(omni_server: OmniServer, openai_client: OpenAIClientHandler) -> None:
     openai_client.send_video_retrieve_http_request(
         {
@@ -141,8 +137,6 @@ def test_get_video_invalid_requests(omni_server: OmniServer, openai_client: Open
 # DELETE /v1/videos/{video_id}
 # ─────────────────────────────────────────────────────────────────────────────
 
-
-@pytest.mark.parametrize("omni_server", _WAN_T2V, indirect=True)
 def test_delete_video_invalid_requests(omni_server: OmniServer, openai_client: OpenAIClientHandler) -> None:
     openai_client.send_video_delete_http_request(
         {
@@ -159,7 +153,6 @@ def test_delete_video_invalid_requests(omni_server: OmniServer, openai_client: O
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("omni_server", _WAN_T2V, indirect=True)
 def test_get_video_content_invalid_requests(omni_server: OmniServer, openai_client: OpenAIClientHandler) -> None:
     openai_client.send_video_content_http_request(
         {

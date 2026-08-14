@@ -69,7 +69,6 @@ def _finalize_edits_form_data(template: dict[str, Any], server_model: str) -> di
         ),
     ],
 )
-@pytest.mark.parametrize("omni_server", _PARAMS, indirect=True)
 def test_images_edits_invalid_requests(
     omni_server: OmniServer,
     openai_client: OpenAIClientHandler,

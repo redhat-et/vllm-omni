@@ -51,7 +51,6 @@ def _prompt() -> str:
 
 
 @hardware_test(res={"cuda": "H100", "npu": "A3"}, num_cards=1)
-@pytest.mark.parametrize("omni_server", _MINICPMO_SERVER, indirect=True)
 def test_invalid_audio_format_rejected(omni_server: OmniServerParams, openai_client: OpenAIClientHandler) -> None:
     """
     Test that invalid audio format is properly rejected.

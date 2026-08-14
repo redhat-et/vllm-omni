@@ -83,7 +83,6 @@ _QWEN_IMAGE = [
         ),
     ],
 )
-@pytest.mark.parametrize("omni_server", _QWEN_IMAGE, indirect=True)
 def test_omni_sleep_wakeup_invalid_requests(
     omni_server: OmniServer,
     openai_client: OpenAIClientHandler,
@@ -105,7 +104,6 @@ def test_omni_sleep_wakeup_invalid_requests(
 
 # Keep this after the invalid-JSON cases: sleep(level=2) discards weights and the
 # shared module server is not usable afterward; module teardown then stops it.
-@pytest.mark.parametrize("omni_server", _QWEN_IMAGE, indirect=True)
 def test_wakeup_after_level2_sleep_fails(
     omni_server: OmniServer,
     openai_client: OpenAIClientHandler,

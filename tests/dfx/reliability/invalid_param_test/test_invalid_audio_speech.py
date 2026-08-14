@@ -111,7 +111,6 @@ def _pcm_wav_mono_bytes(*, duration_s: float = 1.1, sample_rate: int = 44100) ->
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("omni_server", _QWEN3_TTS_SPEECH, indirect=True)
 def test_speech_malformed_json(omni_server: OmniServer, openai_client: OpenAIClientHandler) -> None:
     openai_client.send_audio_speech_http_request(
         {
@@ -123,7 +122,6 @@ def test_speech_malformed_json(omni_server: OmniServer, openai_client: OpenAICli
     )
 
 
-@pytest.mark.parametrize("omni_server", _QWEN3_TTS_SPEECH, indirect=True)
 def test_speech_missing_required_fields(omni_server: OmniServer, openai_client: OpenAIClientHandler) -> None:
     openai_client.send_audio_speech_http_request(
         {
@@ -239,7 +237,6 @@ def test_speech_missing_required_fields(omni_server: OmniServer, openai_client: 
         ),
     ],
 )
-@pytest.mark.parametrize("omni_server", _QWEN3_TTS_SPEECH, indirect=True)
 def test_speech_invalid_field_values(
     omni_server: OmniServer,
     openai_client: OpenAIClientHandler,
@@ -325,7 +322,6 @@ def test_speech_invalid_field_values(
         ),
     ],
 )
-@pytest.mark.parametrize("omni_server", _HIGGS_AUDIO_V3_SPEECH, indirect=True)
 def test_speech_higgs_invalid_field_values(
     omni_server: OmniServer,
     openai_client: OpenAIClientHandler,
@@ -356,7 +352,6 @@ def test_speech_higgs_invalid_field_values(
         ),
     ],
 )
-@pytest.mark.parametrize("omni_server", _AUDEX_TTA_SPEECH, indirect=True)
 def test_speech_audex_tta_invalid_field_values(
     omni_server: OmniServer,
     openai_client: OpenAIClientHandler,
@@ -373,15 +368,12 @@ def test_speech_audex_tta_invalid_field_values(
 # POST /v1/audio/speech/batch (JSON)
 # ─────────────────────────────────────────────────────────────────────────────
 
-
-@pytest.mark.parametrize("omni_server", _QWEN3_TTS_SPEECH, indirect=True)
 def test_speech_batch_empty_items(omni_server: OmniServer, openai_client: OpenAIClientHandler) -> None:
     openai_client.send_audio_speech_batch_http_request(
         {"json": {"items": []}, "timeout": 120, "err_code": (400, 422), "err_message": ("items", "least 1 item")}
     )
 
 
-@pytest.mark.parametrize("omni_server", _QWEN3_TTS_SPEECH, indirect=True)
 def test_speech_batch_missing_items(omni_server: OmniServer, openai_client: OpenAIClientHandler) -> None:
     openai_client.send_audio_speech_batch_http_request(
         {
@@ -615,7 +607,6 @@ def test_speech_batch_missing_items(omni_server: OmniServer, openai_client: Open
         ),
     ],
 )
-@pytest.mark.parametrize("omni_server", _QWEN3_TTS_SPEECH, indirect=True)
 def test_speech_batch_invalid_field_values(
     omni_server: OmniServer,
     openai_client: OpenAIClientHandler,
@@ -667,7 +658,6 @@ _SPEECH_STREAM_WS_SESSION_STREAM_AUDIO_WAV_FRAMES = object()
         ),
     ],
 )
-@pytest.mark.parametrize("omni_server", _QWEN3_TTS_SPEECH, indirect=True)
 def test_speech_stream_invalid_requests(
     omni_server: OmniServer,
     openai_client: OpenAIClientHandler,
@@ -890,7 +880,6 @@ def _voices_upload_multipart_files(kind: str | None) -> dict[str, Any] | None:
         ),
     ],
 )
-@pytest.mark.parametrize("omni_server", _QWEN3_TTS_SPEECH, indirect=True)
 def test_voices_create_invalid_requests(
     omni_server: OmniServer,
     openai_client: OpenAIClientHandler,
@@ -959,7 +948,6 @@ def test_voices_create_invalid_requests(
         ),
     ],
 )
-@pytest.mark.parametrize("omni_server", _QWEN3_TTS_SPEECH, indirect=True)
 def test_voices_delete_invalid_requests(
     omni_server: OmniServer,
     openai_client: OpenAIClientHandler,

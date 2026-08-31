@@ -3438,15 +3438,14 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         from vllm_omni.outputs import OmniRequestOutput
 
         try:
-            # Assume that this will follow the same pattern of adapter.validate and adapter.build
-            # used in _prepare_speech_generation once all RFC is implemented
-            self._adapter.validate(request)
-        except Warning as w:
-            logger.warning("Warning: %s", w)
-
-        try:
             if not request.input or not request.input.strip():
                 raise ValueError("Input text cannot be empty")
+
+            # Assume that this will follow the same adapter pattern
+            # once all RFC is implemented
+            validation_error = self._adapter.validate(request)
+            if validation_error is not None:
+                raise ValueError(validation_error)
 
             if request.ref_audio is not None:
                 fmt_err = self._validate_ref_audio_format(request.ref_audio)
@@ -3461,20 +3460,10 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
                 raise ValueError(err)
 
             request_id = f"speech-{random_uuid()}"
-            prompt: dict[str, Any] = {"input": request.input}
-            if request.ref_audio:
-                wav, sr, _ = await self._resolve_ref_audio(request.ref_audio)
-                prompt["ref_audio"] = (np.asarray(wav, dtype=np.float32), sr)
-            if request.ref_text:
-                prompt["ref_text"] = request.ref_text
-            if request.voice:
-                if request.voice in self.uploaded_speakers and not has_inline_ref_audio:
-                    prompt["voice_name"] = request.voice
-                    prompt["voice_created_at"] = self._voice_created_at(request.voice)
-            if request.language:
-                prompt["lang"] = request.language
-            if request.instructions:
-                prompt["instruct"] = request.instructions
+            prepared_request = await self._adapter.build(
+                request, sampling_params_list=[], has_inline_ref_audio=has_inline_ref_audio
+            )
+            prompt = prepared_request.prompt
 
             logger.info(
                 "Diffusion TTS speech request %s: voice_clone=%s",

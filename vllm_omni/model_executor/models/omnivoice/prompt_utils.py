@@ -56,7 +56,7 @@ def validate_instruction(instruct):
             "'male, indian accent'),\nChinese instructs should use full-width "
             "comma (e.g. '男，河南话')."
         )
-        raise SyntaxWarning(warning)
+        return warning
 
     # --- Language consistency: dialect forces Chinese, accent forces English ---
     if has_dialect(normalised) and has_accent(normalised):
@@ -64,7 +64,7 @@ def validate_instruction(instruct):
             "Cannot mix Chinese dialect and English accent in a single instruct"
             + "Dialects are for Chinese speech, accents for English speech."
         )
-        raise SyntaxWarning(warning)
+        return warning
 
     # --- Unify to single language ---
     normalised = unify_language(normalised)
@@ -84,7 +84,9 @@ def validate_instruction(instruct):
             + "; ".join(parts)
             + ". Each category (gender, age, pitch, style, accent, dialect) allows at most one item."
         )
-        raise SyntaxWarning(warning)
+        return warning
+
+    return None
 
 
 def raw_items(instruct_str: str) -> list:

@@ -27,9 +27,7 @@ class OmniVoiceAdapter(ARTTSAdapter):
         if not request.input or not request.input.strip():
             return "Input text cannot be empty"
 
-        validate_instruction(request.instructions)
-
-        return self.ctx.server._apply_uploaded_speaker(request)
+        return validate_instruction(request.instructions)
 
     async def build(
         self, request: "OpenAICreateSpeechRequest", sampling_params_list: list, has_inline_ref_audio: bool

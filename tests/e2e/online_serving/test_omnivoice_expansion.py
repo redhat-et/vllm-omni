@@ -143,6 +143,7 @@ class TestOmniVoiceVoiceCloning:
         }
         online_client.send_audio_speech_request(request_config)
 
+
 @pytest.mark.parametrize("omni_server", TEST_PARAMS, indirect=True)
 class TestOmniVoiceInstructions:
     """E2E tests for OmniVoice instructions."""
@@ -249,6 +250,7 @@ class TestOmniVoiceInstructions:
             openai_client.send_audio_speech_request(request_config)
 
         assert exc_info.value.status_code == 400
+
 
 @hardware_test(res={"cuda": "L4"}, num_cards=1)
 @pytest.mark.parametrize("omni_server", TEST_PARAMS, indirect=True)

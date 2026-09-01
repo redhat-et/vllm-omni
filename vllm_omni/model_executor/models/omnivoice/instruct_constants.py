@@ -21,7 +21,7 @@ Define speaker attribute tags (gender, age, pitch, accent, dialect) and
 translation/validation utilities between English and Chinese.
 """
 
-import re
+import regex as re
 
 _ZH_RE = re.compile(r"[\u4e00-\u9fff]")
 

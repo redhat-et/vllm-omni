@@ -2,7 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import difflib
-import re
+
+import regex as re
 
 from vllm_omni.model_executor.models.omnivoice.instruct_constants import (
     _INSTRUCT_ALL_VALID,

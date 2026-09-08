@@ -2443,9 +2443,7 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         batch_task = batch.task_type
         available_speakers = self._get_available_speakers()
         supported_languages = (
-            self._adapter.capabilities.supported_languages
-            if self._adapter is not None
-            else frozenset()
+            self._adapter.capabilities.supported_languages if self._adapter is not None else frozenset()
         )
 
         def _check_voice(voice: str, task_type: str | None) -> None:

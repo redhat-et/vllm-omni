@@ -1,10 +1,18 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+
 # vllm-omni customized version
 # Based on: https://github.com/vllm-project/ci-infra/blob/main/buildkite/bootstrap-amd.sh
 # Last synced: 2025-12-15
 # Modifications: Use local template file instead of downloading from ci-infra
 
 set -euo pipefail
+
+# The bootstrap runs from the repository root; ShellCheck does not follow
+# sourced files unless invoked with -x.
+# shellcheck disable=SC1091
+source .buildkite/common/scripts/resolve_skip_ci.sh
 
 if [[ -z "${RUN_ALL:-}" ]]; then
     RUN_ALL=0
@@ -20,10 +28,6 @@ fi
 
 if [[ -z "${AMD_MIRROR_HW:-}" ]]; then
     AMD_MIRROR_HW="amdproduction"
-fi
-
-if [[ -z "${DOCS_ONLY_DISABLE:-}" ]]; then
-    DOCS_ONLY_DISABLE=0
 fi
 
 fail_fast() {
@@ -56,88 +60,6 @@ check_run_all_label() {
     fi
 }
 
-is_docs_only_change() {
-    local file_path
-    local has_any=0
-
-    while IFS= read -r file_path; do
-        [[ -z "${file_path}" ]] && continue
-        has_any=1
-
-        if [[ "${file_path}" == docs/* ]]; then
-            continue
-        fi
-        if [[ "${file_path}" == *.md ]]; then
-            continue
-        fi
-        if [[ "${file_path}" == "mkdocs.yml" ]]; then
-            continue
-        fi
-        return 1
-    done
-
-    [[ "${has_any}" -eq 1 ]]
-}
-
-resolve_skip_ci() {
-    local is_pr_build=0
-    local files
-    local base_branch base_ref
-
-    if [[ "${BUILDKITE_PULL_REQUEST:-false}" != "false" && -n "${BUILDKITE_PULL_REQUEST:-}" ]]; then
-        is_pr_build=1
-    fi
-
-    if [[ "${is_pr_build}" -eq 1 ]]; then
-        base_branch="${BUILDKITE_PULL_REQUEST_BASE_BRANCH:-main}"
-        if ! git rev-parse --verify "origin/${base_branch}" >/dev/null 2>&1; then
-            echo "resolve_skip_ci: origin/${base_branch} not found locally; trying fetch" >&2
-            git fetch --depth=200 origin "${base_branch}" >/dev/null 2>&1 || true
-        fi
-
-        base_ref=""
-        if git rev-parse --verify "origin/${base_branch}" >/dev/null 2>&1; then
-            base_ref="origin/${base_branch}"
-        elif git rev-parse --verify "${base_branch}" >/dev/null 2>&1; then
-            base_ref="${base_branch}"
-        else
-            echo "resolve_skip_ci: cannot resolve PR base ${base_branch}; skip-ci=0" >&2
-            echo -n 0
-            return 0
-        fi
-
-        if ! files="$(git diff --name-only "${base_ref}...${BUILDKITE_COMMIT}" 2>/dev/null)"; then
-            echo "resolve_skip_ci: failed to compute PR changed files; skip-ci=0" >&2
-            echo -n 0
-            return 0
-        fi
-    elif [[ "${BUILDKITE_BRANCH:-}" == "main" ]]; then
-        if ! git rev-parse --verify "${BUILDKITE_COMMIT}^" >/dev/null 2>&1; then
-            echo "resolve_skip_ci: commit has no parent on main; skip-ci=0" >&2
-            echo -n 0
-            return 0
-        fi
-        if ! files="$(git diff --name-only "${BUILDKITE_COMMIT}^..${BUILDKITE_COMMIT}" 2>/dev/null)"; then
-            echo "resolve_skip_ci: failed to compute main changed files; skip-ci=0" >&2
-            echo -n 0
-            return 0
-        fi
-    else
-        echo "resolve_skip_ci: not PR/main build; skip-ci=0" >&2
-        echo -n 0
-        return 0
-    fi
-
-    if is_docs_only_change <<< "${files}"; then
-        echo "resolve_skip_ci: docs-only change detected; skip-ci=1" >&2
-        echo -n 1
-        return 0
-    fi
-
-    echo "resolve_skip_ci: non-doc changes detected; skip-ci=0" >&2
-    echo -n 0
-}
-
 if [[ -z "${COV_ENABLED:-}" ]]; then
     COV_ENABLED=0
 fi
@@ -147,6 +69,8 @@ upload_pipeline() {
     # Install minijinja
     ls .buildkite || buildkite-agent annotate --style error 'Please merge upstream main branch for buildkite CI'
     curl -sSfL https://github.com/mitsuhiko/minijinja/releases/download/2.3.1/minijinja-cli-installer.sh | sh
+    # Installed by the minijinja bootstrap above and only present on the CI agent.
+    # shellcheck disable=SC1091
     source /var/lib/buildkite-agent/.cargo/env
 
     if [[ $BUILDKITE_PIPELINE_SLUG == "fastcheck" ]]; then
@@ -174,22 +98,82 @@ upload_pipeline() {
     cd .buildkite/amd
 
     # Select test definition file: merge suite for main, ready suite for PRs.
-    # For debugging, DEBUG_TEST_YAML can override the selection — accepts
-    # "merge" or "ready" (case-insensitive).
+    # For debugging, DEBUG_TEST_YAML accepts a comma-separated list containing
+    # "merge" and/or "ready" (case-insensitive). Multiple suites are combined
+    # before rendering so they share one amd-build step.
     if [[ -n "${DEBUG_TEST_YAML:-}" ]]; then
-        case "${DEBUG_TEST_YAML,,}" in
-            merge)
-                TEST_YAML="test-amd-merge.yml"
-                ;;
-            ready)
-                TEST_YAML="test-amd-ready.yml"
-                ;;
-            *)
-                echo "ERROR: DEBUG_TEST_YAML must be 'merge' or 'ready', got '$DEBUG_TEST_YAML'" >&2
+        declare -a DEBUG_TEST_SPECS=()
+        declare -A SEEN_DEBUG_TESTS=()
+        IFS=',' read -ra REQUESTED_DEBUG_TESTS <<< "${DEBUG_TEST_YAML,,}"
+
+        for requested_test in "${REQUESTED_DEBUG_TESTS[@]}"; do
+            # Permit readable values such as "ready, merge," and ignore the
+            # empty item produced by a trailing comma.
+            requested_test="${requested_test//[[:space:]]/}"
+            [[ -z "$requested_test" ]] && continue
+
+            if [[ -n "${SEEN_DEBUG_TESTS[$requested_test]:-}" ]]; then
+                echo "ERROR: duplicate DEBUG_TEST_YAML suite '$requested_test'" >&2
                 exit 1
-                ;;
-        esac
-        echo "DEBUG_TEST_YAML override: using $TEST_YAML"
+            fi
+            SEEN_DEBUG_TESTS[$requested_test]=1
+
+            case "$requested_test" in
+                ready)
+                    DEBUG_TEST_SPECS+=("READY_TESTS:test-amd-ready.yml")
+                    ;;
+                merge)
+                    DEBUG_TEST_SPECS+=("MERGE_TESTS:test-amd-merge.yml")
+                    ;;
+                *)
+                    echo "ERROR: DEBUG_TEST_YAML entries must be 'merge' or 'ready', got '$requested_test'" >&2
+                    exit 1
+                    ;;
+            esac
+        done
+
+        if [[ ${#DEBUG_TEST_SPECS[@]} -eq 0 ]]; then
+            echo "ERROR: DEBUG_TEST_YAML did not contain a test suite" >&2
+            exit 1
+        elif [[ ${#DEBUG_TEST_SPECS[@]} -eq 1 ]]; then
+            TEST_YAML="${DEBUG_TEST_SPECS[0]#*:}"
+        else
+            TEST_YAML=$(mktemp "${TMPDIR:-/tmp}/amd-debug-tests.XXXXXX.yml")
+            python - "$TEST_YAML" "${DEBUG_TEST_SPECS[@]}" <<'PY'
+import sys
+
+import yaml
+
+
+output_path, *suite_specs = sys.argv[1:]
+combined = {"env": {}, "steps": []}
+
+for suite_spec in suite_specs:
+    group_name, input_path = suite_spec.split(":", 1)
+    with open(input_path, encoding="utf-8") as test_file:
+        suite = yaml.safe_load(test_file)
+
+    for name, value in (suite.get("env") or {}).items():
+        previous = combined["env"].get(name, value)
+        if previous != value:
+            raise ValueError(
+                f"Conflicting environment value for {name}: {previous!r} != {value!r}"
+            )
+        combined["env"][name] = value
+
+    suite_steps = []
+    for entry in suite.get("steps") or []:
+        if "group" in entry:
+            suite_steps.extend(entry.get("steps") or [])
+        else:
+            suite_steps.append(entry)
+    combined["steps"].append({"group": group_name, "steps": suite_steps})
+
+with open(output_path, "w", encoding="utf-8") as output_file:
+    yaml.safe_dump(combined, output_file, sort_keys=False)
+PY
+        fi
+        echo "DEBUG_TEST_YAML override: using ${DEBUG_TEST_SPECS[*]}"
     elif [[ $BUILDKITE_BRANCH == "main" ]]; then
         TEST_YAML="test-amd-merge.yml"
     else
@@ -214,19 +198,20 @@ upload_pipeline() {
             > pipeline.yaml
     )
     cat pipeline.yaml
+    if [[ "$TEST_YAML" == "${TMPDIR:-/tmp}/amd-debug-tests."*.yml ]]; then
+        rm -f -- "$TEST_YAML"
+    fi
     buildkite-agent artifact upload pipeline.yaml
     buildkite-agent pipeline upload pipeline.yaml
     exit 0
 }
 
 get_diff() {
-    $(git add .)
-    echo $(git diff --name-only --diff-filter=ACMDR $(git merge-base origin/main HEAD))
+    git diff --name-only --diff-filter=ACMDR "$(git merge-base origin/main HEAD)"
 }
 
 get_diff_main() {
-    $(git add .)
-    echo $(git diff --name-only --diff-filter=ACMDR HEAD~1)
+    git diff --name-only --diff-filter=ACMDR HEAD~1
 }
 
 file_diff=$(get_diff)
@@ -234,22 +219,12 @@ if [[ $BUILDKITE_BRANCH == "main" ]]; then
     file_diff=$(get_diff_main)
 fi
 
-# ----------------------------------------------------------------------
-# Early exit start: skip pipeline if conditions are met
-# ----------------------------------------------------------------------
-
-# Match CUDA Buildkite skip-ci behavior for docs/markdown-only changes.
-if [[ "${DOCS_ONLY_DISABLE}" != "1" ]]; then
-    SKIP_CI="$(resolve_skip_ci)"
-    if [[ "${SKIP_CI}" == "1" ]]; then
-        echo "[docs-only] Docs/markdown-only changes detected. Exiting before pipeline upload."
-        exit 0
-    fi
+# Early exit: unified skip-ci (docs / skip marks) and CI-yaml-only level targeting.
+if [[ $BUILDKITE_BRANCH == "main" ]]; then
+    gate_bootstrap_ci amd l3
+else
+    gate_bootstrap_ci amd l2
 fi
-
-# ----------------------------------------------------------------------
-# Early exit end
-# ----------------------------------------------------------------------
 
 patterns=(
     "docker/Dockerfile"
@@ -275,7 +250,7 @@ for file in $file_diff; do
     # First check if file matches any pattern
     matches_pattern=0
     for pattern in "${patterns[@]}"; do
-        if [[ $file == $pattern* ]] || [[ $file == $pattern ]]; then
+        if [[ $file == "$pattern"* ]] || [[ $file == "$pattern" ]]; then
             matches_pattern=1
             break
         fi
@@ -285,7 +260,7 @@ for file in $file_diff; do
     if [[ $matches_pattern -eq 1 ]]; then
         matches_ignore=0
         for ignore in "${ignore_patterns[@]}"; do
-            if [[ $file == $ignore* ]] || [[ $file == $ignore ]]; then
+            if [[ $file == "$ignore"* ]] || [[ $file == "$ignore" ]]; then
                 matches_ignore=1
                 break
             fi

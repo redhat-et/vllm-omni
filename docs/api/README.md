@@ -15,6 +15,36 @@ Main entry points for vLLM-Omni inference and serving.
 - [vllm_omni.entrypoints.omni_base.OmniBase][]
 - [vllm_omni.entrypoints.pd_utils.PDDisaggregationMixin][]
 
+## Clients
+
+Client libraries that talk to a running vLLM-Omni server (the full-duplex Realtime client and its per-model session presets).
+
+- [vllm_omni.clients.duplex.AudioDelta][]
+- [vllm_omni.clients.duplex.AudioFormat][]
+- [vllm_omni.clients.duplex.ConnectionResumed][]
+- [vllm_omni.clients.duplex.DuplexClient][]
+- [vllm_omni.clients.duplex.DuplexClientError][]
+- [vllm_omni.clients.duplex.DuplexConnectionError][]
+- [vllm_omni.clients.duplex.DuplexEvent][]
+- [vllm_omni.clients.duplex.DuplexProtocolError][]
+- [vllm_omni.clients.duplex.DuplexSessionClosedError][]
+- [vllm_omni.clients.duplex.ErrorEvent][]
+- [vllm_omni.clients.duplex.EventCollector][]
+- [vllm_omni.clients.duplex.ListenDecision][]
+- [vllm_omni.clients.duplex.ReconnectPolicy][]
+- [vllm_omni.clients.duplex.ResponseCreated][]
+- [vllm_omni.clients.duplex.ResponseDone][]
+- [vllm_omni.clients.duplex.ResponseHandle][]
+- [vllm_omni.clients.duplex.SessionClosed][]
+- [vllm_omni.clients.duplex.SessionConfig][]
+- [vllm_omni.clients.duplex.SessionCreated][]
+- [vllm_omni.clients.duplex.SessionExpired][]
+- [vllm_omni.clients.duplex.SessionResumed][]
+- [vllm_omni.clients.duplex.SpeakDecision][]
+- [vllm_omni.clients.duplex.TextDelta][]
+- [vllm_omni.clients.duplex.TranscriptDelta][]
+- [vllm_omni.clients.duplex.WebSocketTransport][]
+
 ## Inputs
 
 Input data structures for multi-modal inputs.
@@ -62,7 +92,6 @@ Engine classes for offline and online inference.
 
 Core scheduling and caching components.
 
-- [vllm_omni.core.sched.omni_ar_scheduler.KVCacheTransferData][]
 - [vllm_omni.core.sched.omni_ar_scheduler.OmniARScheduler][]
 - [vllm_omni.core.sched.omni_generation_scheduler.OmniGenerationScheduler][]
 - [vllm_omni.core.sched.output.OmniCachedRequestData][]
@@ -131,7 +160,7 @@ Worker classes and model runners for distributed inference.
 - [vllm_omni.diffusion.worker.diffusion_worker.DiffusionWorker][]
 - [vllm_omni.diffusion.worker.diffusion_worker.WorkerProc][]
 - [vllm_omni.diffusion.worker.diffusion_worker.WorkerWrapperBase][]
-- [vllm_omni.diffusion.worker.utils.DiffusionRequestState][]
+- [vllm_omni.diffusion.worker.utils.StepRequestState][]
 - [vllm_omni.diffusion.worker.utils.RunnerOutput][]
 - [vllm_omni.platforms.npu.worker.npu_ar_model_runner.ExecuteModelState][]
 - [vllm_omni.platforms.npu.worker.npu_ar_model_runner.NPUARModelRunner][]

@@ -29,7 +29,7 @@ from vllm.distributed import (
 )
 from vllm.inputs import MultiModalDataDict
 from vllm.logger import init_logger
-from vllm.model_executor.layers.fused_moe import FusedMoE as SharedFusedMoE
+from vllm.model_executor.layers.fused_moe import FusedMoEFactory as SharedFusedMoE
 from vllm.model_executor.layers.fused_moe import fused_moe_make_expert_params_mapping
 from vllm.model_executor.layers.linear import (
     ColumnParallelLinear,
@@ -128,25 +128,29 @@ class HunyuanModel(HunYuanModel):
         v = v.reshape(-1, hidden_size)
         return torch.concat((q, k, v))
 
-    def get_expert_mapping(self) -> tuple[list[tuple[str, str, int, str]], dict[str, tuple[str, int, int]]]:
-        if _is_moe(self.config):
-            # Params for weights, fp8 weight scales, fp8 activation scales
-            # (param_name, weight_name, expert_id, shard_id)
-            fused_moe_expert_mapping = fused_moe_make_expert_params_mapping(
-                model=self,
-                ckpt_gate_proj_name="gate_proj",
-                ckpt_down_proj_name="down_proj",
-                ckpt_up_proj_name="up_proj",
-                num_experts=self.config.num_experts,
-                num_redundant_experts=self.num_redundant_experts,
-            )
-            expert_weights_remapping = {
-                "gate_proj": ("gate_and_up_proj", 1, 2),
-                "up_proj": ("gate_and_up_proj", 0, 2),
-            }
-            return fused_moe_expert_mapping, expert_weights_remapping
-        else:
-            return [], {}
+    def get_expert_mapping(self) -> list[tuple[str, str, int, str]]:
+        if not _is_moe(self.config):
+            return []
+
+        # Params for weights, fp8 weight scales, fp8 activation scales
+        # (param_name, weight_name, expert_id, shard_id)
+        return fused_moe_make_expert_params_mapping(
+            model=self,
+            ckpt_gate_proj_name="gate_proj",
+            ckpt_down_proj_name="down_proj",
+            ckpt_up_proj_name="up_proj",
+            num_experts=self.config.num_experts,
+            num_redundant_experts=self.num_redundant_experts,
+        )
+
+    def _get_expert_weights_remapping(self) -> dict[str, tuple[str, int, int]]:
+        """Return the vLLM-Omni-local remapping for Hunyuan checkpoint weights."""
+        if not _is_moe(self.config):
+            return {}
+        return {
+            "gate_proj": ("gate_and_up_proj", 1, 2),
+            "up_proj": ("gate_and_up_proj", 0, 2),
+        }
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
         cla_factor = _get_cla_factor(self.config)
@@ -174,7 +178,8 @@ class HunyuanModel(HunYuanModel):
 
         params_dict = dict(self.named_parameters())
         loaded_params: set[str] = set()
-        expert_params_mapping, expert_weights_remapping = self.get_expert_mapping()
+        expert_params_mapping = self.get_expert_mapping()
+        expert_weights_remapping = self._get_expert_weights_remapping()
 
         # List of unexpected keywords in weight names
         unexpected_keywords = [
@@ -222,14 +227,8 @@ class HunyuanModel(HunYuanModel):
             if self.config.tie_word_embeddings and "lm_head.weight" in name:
                 continue
 
-            if self.quant_config is not None and (scale_name := self.quant_config.get_cache_scale(name)):
-                # Loading kv cache scales for compressed-tensors quantization
-                param = params_dict[scale_name]
-                weight_loader = getattr(param, "weight_loader", default_weight_loader)
-                loaded_weight = loaded_weight[0]
-                weight_loader(param, loaded_weight)
-                continue
-
+            # KV-cache scales are renamed to .attn.{k,v,q}_scale by the
+            # quant_config mapper in the outer AutoWeightsLoader.
             is_found = False
             for param_name, weight_name, shard_id in stacked_params_mapping:
                 if weight_name not in name:

@@ -384,7 +384,7 @@ class OpenAICreateAudioGenerateRequest(BaseModel):
     )
     guidance_scale: float | None = Field(
         default=None,
-        gt=0,
+        ge=0,
         le=1000,
         description="Guidance scale for diffusion models",
     )

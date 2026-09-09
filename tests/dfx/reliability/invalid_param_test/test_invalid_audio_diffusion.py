@@ -60,8 +60,11 @@ _PARAMS = [
         pytest.param(
             {"negative_prompt": ["noise"]}, ("negative_prompt", "a valid string"), id="negative_prompt_wrong_type"
         ),
-        pytest.param({"guidance_scale": -1.0}, ("guidance_scale", "greater_than", "0"), id="guidance_scale_negative"),
-        pytest.param({"guidance_scale": 0}, ("guidance_scale", "greater_than", "0"), id="guidance_scale_zero"),
+        pytest.param(
+            {"guidance_scale": -1.0},
+            ("guidance_scale", "greater_than_equal", "0"),
+            id="guidance_scale_negative",
+        ),
         pytest.param(
             {"num_inference_steps": 0},
             ("num_inference_steps", "greater_than_equal", "1"),

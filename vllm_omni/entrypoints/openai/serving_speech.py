@@ -333,14 +333,13 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
             allowed_media_domains=allowed_media_domains,
         )
         instance._tts_model_type = "omnivoice"
-        # Set adapter to OmniVoice as it is currently the only diffusion TTS model
-        # Temporary assignment until https://github.com/vllm-project/vllm-omni/issues/4327 is completed
-        instance._adapter = OmniVoiceAdapter(SpeechServingContext(server=instance, engine_client=None))
         instance._is_tts = False
         # Diffusion-only instances don't have a TTS stage; set None so any
         # ``_is_tts_model()`` / ``_tts_stage`` access doesn't raise AttributeError.
         instance._tts_stage = None
-        instance._adapter = None
+        # Set adapter to OmniVoice as it is currently the only diffusion TTS model
+        # Temporary assignment until https://github.com/vllm-project/vllm-omni/issues/4327 is completed
+        instance._adapter = OmniVoiceAdapter(SpeechServingContext(server=instance, engine_client=None))
         instance._init_speaker_storage()
         return instance
 

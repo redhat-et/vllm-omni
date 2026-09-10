@@ -27,6 +27,10 @@ class OmniVoiceAdapter(ARTTSAdapter):
         if not request.input or not request.input.strip():
             return "Input text cannot be empty"
 
+        err = self.ctx.server._apply_uploaded_speaker(request)
+        if err is not None:
+            return err
+
         return validate_instruction(request.instructions)
 
     async def build(

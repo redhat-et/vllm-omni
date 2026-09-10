@@ -2064,6 +2064,11 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
             if not request.input or not request.input.strip():
                 raise ValueError("Input text cannot be empty")
 
+            # Set `has_inline_ref_audio` before calling validate
+            # since it calls `_apply_uploaded_speaker`
+            # which modifies request.ref_audio
+            has_inline_ref_audio = request.ref_audio is not None
+
             # Assume that this will follow the same adapter pattern
             # once all RFC is implemented
             validation_error = self._adapter.validate(request)
@@ -2076,11 +2081,6 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
                     return self._diffusion_error_response(fmt_err, status_code=400)
 
             request.voice = self._get_normalized_voice(request.voice)
-
-            has_inline_ref_audio = request.ref_audio is not None
-            err = self._apply_uploaded_speaker(request)
-            if err:
-                raise ValueError(err)
 
             request_id = f"speech-{random_uuid()}"
             prepared_request = await self._adapter.build(

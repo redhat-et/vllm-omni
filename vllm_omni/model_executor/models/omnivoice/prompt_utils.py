@@ -63,7 +63,7 @@ def validate_instruction(instruct):
     if has_dialect(normalised) and has_accent(normalised):
         warning = (
             "Cannot mix Chinese dialect and English accent in a single instruct."
-            + "Dialects are for Chinese speech, accents for English speech."
+            + "\nDialects are for Chinese speech, accents for English speech."
         )
         return warning
 

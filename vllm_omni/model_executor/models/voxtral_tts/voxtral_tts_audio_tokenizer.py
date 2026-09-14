@@ -900,6 +900,10 @@ class VoxtralTTSAudioTokenizer(nn.Module):
         """List of size of each codebook"""
         return self.quantizer.codebook_sizes
 
+    @property
+    def encoder_loaded(self) -> bool:
+        return self._encoder_loaded
+
     def load_weight(self, weight: tuple[str, torch.Tensor]) -> str:
         params_dict = dict(self.named_parameters())
         name, loaded_weight = weight

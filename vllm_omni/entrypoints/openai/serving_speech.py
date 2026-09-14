@@ -378,7 +378,9 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         instance._tts_stage = None
         # Set adapter to OmniVoice as it is currently the only diffusion TTS model
         # Temporary assignment until https://github.com/vllm-project/vllm-omni/issues/4327 is completed
-        instance._adapter = OmniVoiceAdapter(SpeechServingContext(server=instance, engine_client=None))
+        instance._adapter = OmniVoiceAdapter(
+            SpeechServingContext(server=instance, diffusion_engine=instance._diffusion_engine)
+        )
         instance._init_speaker_storage()
         return instance
 
@@ -2342,6 +2344,10 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
             # which modifies request.ref_audio
             has_inline_ref_audio = request.ref_audio is not None
 
+            # Normalise voice before specialised adapter validation
+            # to allow tests to catch invalid voices generally
+            request.voice = self._get_normalized_voice(request.voice)
+
             # Assume that this will follow the same adapter pattern
             # once all RFC is implemented
             validation_error = self._adapter.validate(request)
@@ -2352,8 +2358,6 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
                 fmt_err = self._validate_ref_audio_format(request.ref_audio)
                 if fmt_err:
                     return self._diffusion_error_response(fmt_err, status_code=400)
-
-            request.voice = self._get_normalized_voice(request.voice)
 
             request_id = f"speech-{random_uuid()}"
             prepared_request = await self._adapter.build(

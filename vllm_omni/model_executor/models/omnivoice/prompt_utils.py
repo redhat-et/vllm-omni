@@ -111,7 +111,7 @@ def prepare_instruct(instruct_str) -> str:
     normalised = normalise(instruct_str)
     has_zh = any(any("\u4e00" <= c <= "\u9fff" for c in n) for n in normalised)
     separator = "，" if has_zh else ", "
-    return separator.join(normalised)
+    return separator.join(unify_language(normalised))
 
 
 def unify_language(normalised_instruct: list) -> list:

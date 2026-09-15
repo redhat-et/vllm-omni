@@ -33,6 +33,14 @@ class VoxtralTTSAdapter(ARTTSAdapter):
         if not request.voice and not ref_audio:
             raise ValueError("Voxtral requires either a voice name or ref_audio.")
 
+        if ref_audio is not None and not self._encoder_loaded:
+            validation_error = (
+                "Voice cloning with 'ref_audio' requires the full Voxtral checkpoint "
+                "with encoder weights. The open-source variant only supports "
+                "preset voices via the 'voice' parameter."
+            )
+            raise ValueError(validation_error)
+
         server = self.ctx.server
         if server._tts_tokenizer is None:
             from vllm.tokenizers import cached_tokenizer_from_config
@@ -40,23 +48,7 @@ class VoxtralTTSAdapter(ARTTSAdapter):
             server._tts_tokenizer = cached_tokenizer_from_config(self.ctx.engine_client.model_config).instruct
 
         if isinstance(ref_audio, str) and ref_audio.startswith("data:"):
-            if self._encoder_loaded:
-                _, _, ref_audio = ref_audio.partition(",")
-                tokenized = server._tts_tokenizer.encode_speech_request(
-                    SpeechRequest(input=request.input, ref_audio=ref_audio)
-                )
-                audio = tokenized.audios[0]
-                return {
-                    "prompt_token_ids": tokenized.tokens,
-                    "multi_modal_data": {"audio": [(audio.audio_array, audio.sampling_rate)]},
-                }
-            else:
-                validation_error = (
-                    "Voice cloning with 'ref_audio' requires the full Voxtral checkpoint "
-                    "with encoder weights. The open-source variant only supports "
-                    "preset voices via the 'voice' parameter."
-                )
-                raise ValueError(validation_error)
+            _, _, ref_audio = ref_audio.partition(",")
 
         if request.voice is not None:
             tokenized = server._tts_tokenizer.encode_speech_request(
@@ -65,6 +57,13 @@ class VoxtralTTSAdapter(ARTTSAdapter):
             prompt = tokens_input(prompt_token_ids=tokenized.tokens)
             prompt["additional_information"] = {"voice": [request.voice]}
             return prompt
+
+        tokenized = server._tts_tokenizer.encode_speech_request(SpeechRequest(input=request.input, ref_audio=ref_audio))
+        audio = tokenized.audios[0]
+        return {
+            "prompt_token_ids": tokenized.tokens,
+            "multi_modal_data": {"audio": [(audio.audio_array, audio.sampling_rate)]},
+        }
 
     def validate(self, request: "OpenAICreateSpeechRequest") -> str | None:
         """Validate Voxtral TTS request parameters. Returns error message or None."""

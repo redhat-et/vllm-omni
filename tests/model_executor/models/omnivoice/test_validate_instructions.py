@@ -21,7 +21,7 @@ class TestOmniVoiceInstructions:
         assert warning is None
 
     def test_free_form_instruction(self) -> None:
-        """Test free form instruction raises warning"""
+        """Test free form instruction rejected"""
         instructions = "happy little scottish boy"
         warning = validate_instruction(instructions)
         assert warning.startswith("Unsupported instruct items found")
@@ -33,15 +33,16 @@ class TestOmniVoiceInstructions:
         assert warning.startswith("Conflicting instruct items within the same category")
 
     def test_non_existent_instruction_english(self) -> None:
-        """Test non existent instruct raises warning"""
+        """Test non existent instruct rejected"""
         instructions = "male, english accent"
         warning = validate_instruction(instructions)
         assert warning.startswith("Unsupported instruct items found")
 
     def test_non_existent_instruction_chinese(self) -> None:
         """Test non existent instruct rejected"""
-        # TODO ask a native speaker to provide and validate this case
-        return
+        instructions = "男生"
+        warning = validate_instruction(instructions)
+        assert warning.startswith("Unsupported instruct items found")
 
     def test_mixed_dialect_accent_instruction(self) -> None:
         """Test conflicting chinese dialect and english accent is handled"""

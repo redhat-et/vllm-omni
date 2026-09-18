@@ -1108,7 +1108,7 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         """
         async with self._upload_lock:
             voice_name_lower = name.lower()
-            built_in_speakers = self._get_available_speakers() - set(self.uploaded_speakers)
+            built_in_speakers = self._get_available_voices() - set(self.uploaded_speakers)
 
             if voice_name_lower in built_in_speakers:
                 warning = f"Cannot delete built-in voice '{name}'"

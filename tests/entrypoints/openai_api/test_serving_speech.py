@@ -4205,6 +4205,23 @@ def test_api_server_delete_built_in_voice_returns_403(mocker: MockerFixture):
     )
 
 
+def test_api_server_delete_default_voice_returns_403(mocker: MockerFixture):
+    _patch_api_server_base(mocker)
+    handler = mocker.MagicMock()
+    handler.uploaded_speakers = set()
+    handler.delete_voice = mocker.AsyncMock(return_value="Cannot delete built-in voice 'default'")
+    raw_request = _make_api_server_request(handler, method="DELETE", path="/v1/audio/voices/default")
+
+    response = asyncio.run(api_server_module.delete_voice("default", raw_request))
+
+    _assert_openai_error_response(
+        response,
+        status_code=403,
+        message="Cannot delete built-in voice 'default'",
+        err_type="ForbiddenError",
+    )
+
+
 def test_api_server_delete_voice_exception_returns_500(mocker: MockerFixture):
     handler = mocker.MagicMock()
     handler.delete_voice = mocker.AsyncMock(side_effect=RuntimeError("disk failed"))

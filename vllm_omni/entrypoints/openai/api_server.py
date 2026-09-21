@@ -1350,14 +1350,14 @@ def OmniAudioGenerate(request: Request) -> OmniOpenAIServingAudioGenerate | None
 @load_aware_call
 async def create_chat_completion(request: ChatCompletionRequest, raw_request: Request):
     raw_body = await raw_request.json()
-    if "modalities" in raw_body:
+    if "modalities" in raw_body and raw_body["modalities"] is not None:
         modalities = raw_body["modalities"]
         if not isinstance(modalities, list) or not all(isinstance(m, str) for m in modalities):
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST.value,
                 detail='modalities must be a list of strings, e.g. ["text", "audio", "image"]',
             )
-    if "logprobs" in raw_body and not isinstance(raw_body["logprobs"], bool):
+    if "logprobs" in raw_body and raw_body["logprobs"] is not None and not isinstance(raw_body["logprobs"], bool):
         raise HTTPException(
             status_code=HTTPStatus.BAD_REQUEST.value,
             detail="logprobs must be a boolean (true or false)",

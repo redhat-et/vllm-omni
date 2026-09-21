@@ -4029,7 +4029,7 @@ def test_voice_routes_without_tokenization(mocker: MockerFixture, method: str, h
     if handler is not None:
         handler._get_available_voices.return_value = []
         handler.uploaded_speakers = {}
-        handler.delete_voice = mocker.AsyncMock(return_value=False)
+        handler.delete_voice = mocker.AsyncMock(return_value="Voice 'missing' not found")
     app = _make_api_server_request(handler).app
     app.add_api_route("/v1/audio/voices", api_server_module.list_voices, methods=["GET"])
     app.add_api_route("/v1/audio/voices", api_server_module.upload_voice, methods=["POST"])
@@ -4188,7 +4188,6 @@ def test_api_server_delete_voice_not_found_returns_404(mocker: MockerFixture):
 
 
 def test_api_server_delete_built_in_voice_returns_403(mocker: MockerFixture):
-    _patch_api_server_base(mocker)
     handler = mocker.MagicMock()
     handler.uploaded_speakers = set()
     handler._get_available_speakers = mocker.Mock(return_value=set("built-in"))
@@ -4206,7 +4205,6 @@ def test_api_server_delete_built_in_voice_returns_403(mocker: MockerFixture):
 
 
 def test_api_server_delete_default_voice_returns_403(mocker: MockerFixture):
-    _patch_api_server_base(mocker)
     handler = mocker.MagicMock()
     handler.uploaded_speakers = set()
     handler.delete_voice = mocker.AsyncMock(return_value="Cannot delete built-in voice 'default'")

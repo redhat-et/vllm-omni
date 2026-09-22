@@ -5150,7 +5150,7 @@ class TestTTSAsyncOffloading:
             models=mock_models,
             request_logger=mocker.MagicMock(),
         )
-        server.uploaded_speakers = set()
+        server.uploaded_speakers = {}
         yield server
         server.shutdown()
 

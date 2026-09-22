@@ -37,6 +37,7 @@ from vllm_omni.entrypoints.omni_base import OmniEngineDeadError
 from vllm_omni.entrypoints.openai import api_server as api_server_module
 from vllm_omni.entrypoints.openai import serving_speech as serving_speech_module
 from vllm_omni.entrypoints.openai.audio_utils_mixin import AudioMixin
+from vllm_omni.entrypoints.openai.errors import InvalidPresetVoiceReferenceError, InvalidVoiceReferenceError
 from vllm_omni.entrypoints.openai.protocol.audio import (
     BatchSpeechRequest,
     CreateAudio,
@@ -330,13 +331,12 @@ def test_app(mocker: MockerFixture, tmp_path, monkeypatch):
     # Add delete_voice endpoint
     async def delete_voice(name: str):
         try:
-            err = await speech_server.delete_voice(name)
-            if err is not None:
-                if "not found" in err:
-                    raise HTTPException(status_code=404, detail=err)
-                else:
-                    raise HTTPException(status_code=403, detail=err)
+            await speech_server.delete_voice(name)
             return {"success": True, "message": f"Voice '{name}' deleted successfully"}
+        except InvalidPresetVoiceReferenceError as e:
+            raise HTTPException(status_code=403, detail=str(e))
+        except InvalidVoiceReferenceError as e:
+            raise HTTPException(status_code=404, detail=str(e))
         except HTTPException:
             raise
         except ValueError as e:
@@ -595,7 +595,10 @@ class TestSpeechAPI:
     def test_upload_voice_with_speaker_description(self, client, tmp_path):
         """Test voice upload with speaker_description stores and returns the description."""
         # Pre-cleanup in case a previous test run left this voice behind
-        client.delete("/v1/audio/voices/test_voice_vd")
+        try:
+            client.delete("/v1/audio/voices/test_voice_vd")
+        except InvalidVoiceReferenceError:
+            pass
 
         audio_content = b"fake audio content" * 1000
         files = {"audio_sample": ("test.wav", audio_content, "audio/wav")}
@@ -613,7 +616,11 @@ class TestSpeechAPI:
 
     def test_upload_voice_speaker_description_in_listing(self, client):
         """Test that speaker_description survives the upload → list round-trip."""
-        client.delete("/v1/audio/voices/test_voice_sd_list")
+        # Pre-cleanup in case a previous test run left this voice behind
+        try:
+            client.delete("/v1/audio/voices/test_voice_sd_list")
+        except InvalidVoiceReferenceError:
+            pass
 
         audio_content = b"fake audio content" * 1000
         files = {"audio_sample": ("test.wav", audio_content, "audio/wav")}
@@ -726,17 +733,23 @@ class TestSpeechAPI:
         assert "deleted successfully" in result["message"]
 
         # Verify it's gone by trying to delete again
-        response = client.delete("/v1/audio/voices/test_voice7")
-        assert response.status_code == 404
-        result = response.json()
-        assert "not found" in result["detail"]
+        try:
+            response = client.delete("/v1/audio/voices/test_voice7")
+        except InvalidVoiceReferenceError as e:
+            assert response.status_code == 404
+            result = response.json()
+            assert "not found" in result["detail"]
+            assert result["detail"] == e
 
     def test_delete_voice_not_found(self, client):
         """Test deleting a non-existent voice."""
-        response = client.delete("/v1/audio/voices/nonexistent")
-        assert response.status_code == 404
-        result = response.json()
-        assert "not found" in result["detail"]
+        try:
+            response = client.delete("/v1/audio/voices/nonexistent")
+        except InvalidVoiceReferenceError as e:
+            assert response.status_code == 404
+            result = response.json()
+            assert "not found" in result["detail"]
+            assert result["detail"] == e
 
     # ── speaker_embedding upload via voices endpoint ──
 
@@ -4029,7 +4042,7 @@ def test_voice_routes_without_tokenization(mocker: MockerFixture, method: str, h
     if handler is not None:
         handler._get_available_voices.return_value = []
         handler.uploaded_speakers = {}
-        handler.delete_voice = mocker.AsyncMock(return_value="Voice 'missing' not found")
+        handler.delete_voice = mocker.AsyncMock(side_effect=InvalidVoiceReferenceError("Voice 'missing' not found"))
     app = _make_api_server_request(handler).app
     app.add_api_route("/v1/audio/voices", api_server_module.list_voices, methods=["GET"])
     app.add_api_route("/v1/audio/voices", api_server_module.upload_voice, methods=["POST"])
@@ -4174,7 +4187,7 @@ def test_api_server_delete_voice_value_error_returns_400(mocker: MockerFixture):
 
 def test_api_server_delete_voice_not_found_returns_404(mocker: MockerFixture):
     handler = mocker.MagicMock()
-    handler.delete_voice = mocker.AsyncMock(return_value="Voice 'missing' not found")
+    handler.delete_voice = mocker.AsyncMock(side_effect=InvalidVoiceReferenceError("Voice 'missing' not found"))
     raw_request = _make_api_server_request(handler, method="DELETE", path="/v1/audio/voices/missing")
 
     response = asyncio.run(api_server_module.delete_voice("missing", raw_request))
@@ -4191,7 +4204,9 @@ def test_api_server_delete_built_in_voice_returns_403(mocker: MockerFixture):
     handler = mocker.MagicMock()
     handler.uploaded_speakers = set()
     handler._get_available_speakers = mocker.Mock(return_value=set("built-in"))
-    handler.delete_voice = mocker.AsyncMock(return_value="Cannot delete built-in voice 'built-in'")
+    handler.delete_voice = mocker.AsyncMock(
+        side_effect=InvalidPresetVoiceReferenceError("Cannot delete built-in voice 'built-in'")
+    )
     raw_request = _make_api_server_request(handler, method="DELETE", path="/v1/audio/voices/built-in")
 
     response = asyncio.run(api_server_module.delete_voice("built-in", raw_request))
@@ -4207,7 +4222,9 @@ def test_api_server_delete_built_in_voice_returns_403(mocker: MockerFixture):
 def test_api_server_delete_default_voice_returns_403(mocker: MockerFixture):
     handler = mocker.MagicMock()
     handler.uploaded_speakers = set()
-    handler.delete_voice = mocker.AsyncMock(return_value="Cannot delete built-in voice 'default'")
+    handler.delete_voice = mocker.AsyncMock(
+        side_effect=InvalidPresetVoiceReferenceError("Cannot delete built-in voice 'default'")
+    )
     raw_request = _make_api_server_request(handler, method="DELETE", path="/v1/audio/voices/default")
 
     response = asyncio.run(api_server_module.delete_voice("default", raw_request))

@@ -119,6 +119,8 @@ from vllm_omni.entrypoints.openai.diffusion import (
     apply_stage_default_sampling_params,
 )
 from vllm_omni.entrypoints.openai.errors import (
+    InvalidPresetVoiceReferenceError,
+    InvalidVoiceReferenceError,
     _create_speech_error_json_response,
     _error_response_to_json_response,
 )
@@ -1652,23 +1654,20 @@ async def delete_voice(name: str, raw_request: Request):
 
     try:
         # Delete the voice
-        err = await handler.delete_voice(name)
-        if err is not None:
-            if "not found" in err:
-                return _create_speech_error_json_response(
-                    err,
-                    err_type="NotFoundError",
-                    status_code=HTTPStatus.NOT_FOUND,
-                )
-            else:
-                return _create_speech_error_json_response(
-                    err,
-                    err_type="ForbiddenError",
-                    status_code=HTTPStatus.FORBIDDEN,
-                )
-
+        await handler.delete_voice(name)
         return JSONResponse(content={"success": True, "message": f"Voice '{name}' deleted successfully"})
-
+    except InvalidPresetVoiceReferenceError as e:
+        return _create_speech_error_json_response(
+            str(e),
+            err_type="ForbiddenError",
+            status_code=HTTPStatus.FORBIDDEN,
+        )
+    except InvalidVoiceReferenceError as e:
+        return _create_speech_error_json_response(
+            str(e),
+            err_type="NotFoundError",
+            status_code=HTTPStatus.NOT_FOUND,
+        )
     except ValueError as e:
         return _create_speech_error_json_response(str(e))
     except Exception as e:

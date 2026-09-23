@@ -595,10 +595,8 @@ class TestSpeechAPI:
     def test_upload_voice_with_speaker_description(self, client, tmp_path):
         """Test voice upload with speaker_description stores and returns the description."""
         # Pre-cleanup in case a previous test run left this voice behind
-        try:
-            client.delete("/v1/audio/voices/test_voice_vd")
-        except InvalidVoiceReferenceError:
-            pass
+        response = client.delete("/v1/audio/voices/test_voice_vd")
+        assert response.status_code == 404 or response.status_code == 200
 
         audio_content = b"fake audio content" * 1000
         files = {"audio_sample": ("test.wav", audio_content, "audio/wav")}
@@ -617,10 +615,8 @@ class TestSpeechAPI:
     def test_upload_voice_speaker_description_in_listing(self, client):
         """Test that speaker_description survives the upload → list round-trip."""
         # Pre-cleanup in case a previous test run left this voice behind
-        try:
-            client.delete("/v1/audio/voices/test_voice_sd_list")
-        except InvalidVoiceReferenceError:
-            pass
+        response = client.delete("/v1/audio/voices/test_voice_sd_list")
+        assert response.status_code == 404 or response.status_code == 200
 
         audio_content = b"fake audio content" * 1000
         files = {"audio_sample": ("test.wav", audio_content, "audio/wav")}
@@ -733,23 +729,17 @@ class TestSpeechAPI:
         assert "deleted successfully" in result["message"]
 
         # Verify it's gone by trying to delete again
-        try:
-            response = client.delete("/v1/audio/voices/test_voice7")
-        except InvalidVoiceReferenceError as e:
-            assert response.status_code == 404
-            result = response.json()
-            assert "not found" in result["detail"]
-            assert result["detail"] == e
+        response = client.delete("/v1/audio/voices/test_voice7")
+        assert response.status_code == 404
+        result = response.json()
+        assert "not found" in result["detail"]
 
     def test_delete_voice_not_found(self, client):
         """Test deleting a non-existent voice."""
-        try:
-            response = client.delete("/v1/audio/voices/nonexistent")
-        except InvalidVoiceReferenceError as e:
-            assert response.status_code == 404
-            result = response.json()
-            assert "not found" in result["detail"]
-            assert result["detail"] == e
+        response = client.delete("/v1/audio/voices/nonexistent")
+        assert response.status_code == 404
+        result = response.json()
+        assert "not found" in result["detail"]
 
     # ── speaker_embedding upload via voices endpoint ──
 

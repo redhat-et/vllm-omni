@@ -256,7 +256,6 @@ class TestOmniVoiceInstructions:
     @hardware_test(res={"cuda": "L4"}, num_cards=1)
     def test_chinese_instruction(self, omni_server, openai_client) -> None:
         """Test valid chinese instruction"""
-        # TODO ask a native speaker to provide an input and validate this case
         request_config = {
             "model": omni_server.model,
             "input": get_prompt("text"),
@@ -323,8 +322,19 @@ class TestOmniVoiceInstructions:
     @hardware_test(res={"cuda": "L4"}, num_cards=1)
     def test_non_existent_instruction_chinese(self, omni_server, openai_client) -> None:
         """Test non existent instruct rejected"""
-        # TODO ask a native speaker to provide and validate this case
-        return
+        request_config = {
+            "model": omni_server.model,
+            "input": get_prompt("text"),
+            "response_format": "wav",
+            "timeout": 180.0,
+            "min_audio_bytes": _DEFAULT_MIN_AUDIO_BYTES,
+            "instructions": "男生",
+        }
+
+        with pytest.raises(OpenAIBadRequestError, match="Unsupported instruct items found") as exc_info:
+            openai_client.send_audio_speech_request(request_config)
+
+        assert exc_info.value.status_code == 400
 
     @hardware_test(res={"cuda": "L4"}, num_cards=1)
     def test_mixed_dialect_accent_instruction(self, omni_server, openai_client) -> None:

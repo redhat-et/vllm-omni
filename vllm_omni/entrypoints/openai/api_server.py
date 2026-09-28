@@ -886,25 +886,18 @@ async def omni_init_app_state(
         state.serving_tokenization = None
 
         # Use for_diffusion method to create chat handler
-        state.openai_serving_chat = (
-            OmniOpenAIServingChat.for_diffusion(
-                diffusion_engine=engine_client,  # type: ignore
-                model_name=model_name,
-            )
-            if "generate" in supported_tasks
-            else None
+        # The chat handler should always be loaded to support conversational and multimodal pipelines
+        state.openai_serving_chat = OmniOpenAIServingChat.for_diffusion(
+            diffusion_engine=engine_client,  # type: ignore
+            model_name=model_name,
         )
-        state.openai_serving_chat_batch = (
-            OmniOpenAIServingChatBatch.for_diffusion(
-                diffusion_engine=engine_client,  # type: ignore
-                model_name=model_name,
-            )
-            if "generate" in supported_tasks
-            else None
+
+        state.openai_serving_chat_batch = OmniOpenAIServingChatBatch.for_diffusion(
+            diffusion_engine=engine_client,  # type: ignore
+            model_name=model_name,
         )
 
         # audio related
-        state.openai_serving_speech = None
         state.openai_serving_audio_generate = OmniOpenAIServingAudioGenerate.for_diffusion(
             engine_client,
             state.openai_serving_models,
@@ -1225,8 +1218,12 @@ async def omni_init_app_state(
         engine_client, state.openai_serving_models, request_logger=request_logger, model_name=model_name
     )
 
-    state.openai_streaming_speech = OmniStreamingSpeechHandler(
-        speech_service=state.openai_serving_speech,
+    state.openai_streaming_speech = (
+        OmniStreamingSpeechHandler(
+            speech_service=state.openai_serving_speech,
+        )
+        if state.openai_serving_speech is not None
+        else None
     )
     state.openai_streaming_video = (
         create_streaming_video_handler(

@@ -1,9 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+
 # Copyright 2026 Tencent.
 # token2wav: audio token codes -> waveform (inference only)
 # Pipeline: Token -> Latent (flow matching) -> Waveform (BigVGAN)
 
 import math
-from collections import OrderedDict, namedtuple
+from collections import namedtuple
 
 import numpy as np
 import torch
@@ -598,7 +601,7 @@ class Token2latentFlowMatching(nn.Module):
         latent_cond = torch.zeros(b, tgt_lens, self.target_dim).to(device)
         if prefix_target is not None:
             latent_cond[:, : prefix_target.size(1), :] = prefix_target
-        sample, trajectory = self.sample(
+        sample, _ = self.sample(
             tokens=token, audio=latent_cond, steps=s_steps, alpha=cfg_alpha, g_cond=ge, rescale_logits=rescale_logits
         )
         return sample
@@ -612,9 +615,8 @@ class Token2latentFlowMatching(nn.Module):
                 output = torch.cat([tokens, audio, z], dim=-1)
                 return self.vectorfield_forward(inputs=output, times=t.unsqueeze(0), self_attn_mask=None, g_cond=g_cond)
             tokens_empty = torch.zeros(*audio.shape[:2], self.model_dim, device=tokens.device, dtype=tokens.dtype)
-            audio_empty = audio
             tokens_t = torch.cat([tokens_empty, tokens], dim=0)
-            audio_t = torch.cat([audio_empty, audio], dim=0)
+            audio_t = torch.cat([audio, audio], dim=0)
             audio_noizy_t = torch.cat([z, z], dim=0)
             t_t = torch.stack([t, t], dim=0)
             c = g_cond
@@ -803,25 +805,6 @@ class Token2WavDecoder(nn.Module):
 
         self.upsample_factor = self.token2latent.config.get("upsample_factor", 1)
         self.wav_input_sr = config.get("wav_input_sr", 24000)
-
-        self.trainable_module = ["wavegan", "token2latent"]
-
-    def state_dict(self):
-        param_dict = OrderedDict()
-        for name in self.trainable_module:
-            state = self.get_submodule(name).state_dict(prefix=f"{name}.")
-            param_dict.update(state)
-        return param_dict
-
-    def load_state_dict(self, param_dict):
-        for name in self.trainable_module:
-            module_state = OrderedDict()
-            name_len = len(name)
-            for k, v in param_dict.items():
-                if k.startswith(f"{name}."):
-                    new_k = k[name_len + 1 :]
-                    module_state[new_k] = v
-            self.get_submodule(name).load_state_dict(module_state, strict=False)
 
     @torch.no_grad()
     def preprocess_infer_data(self, data):

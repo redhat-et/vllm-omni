@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 import pytest
 import torch
+from vllm.platforms import current_platform
 
 from vllm_omni.attention import fish_kvcache_attn, fish_kvcache_backend
 
@@ -92,12 +93,34 @@ def _metadata(
     )()
 
 
+def _decode_kv_cache(
+    *,
+    num_blocks: int = 8,
+    block_size: int = 16,
+    num_kv_heads: int = 8,
+    head_size: int = 128,
+    dtype: torch.dtype = torch.float16,
+) -> torch.Tensor:
+    # vLLM >=0.23.0 KV cache layout: (num_blocks, num_kv_heads, block_size,
+    # 2*head_size) with K and V packed in the last dimension.
+    return torch.zeros((num_blocks, num_kv_heads, block_size, 2 * head_size), dtype=dtype)
+
+
 def test_fish_kvcache_enabled_by_default(monkeypatch):
     monkeypatch.delenv("VLLM_OMNI_FISH_KVCACHE_ATTN", raising=False)
 
     assert fish_kvcache_attn.is_fish_kvcache_attn_enabled()
     assert fish_kvcache_backend._fish_kvcache_enabled()
     assert not fish_kvcache_attn.is_fish_kvcache_attn_required()
+
+
+def test_fish_kvcache_fast_path_is_unavailable_off_cuda(monkeypatch):
+    monkeypatch.setattr(current_platform, "is_cuda", lambda: False)
+    monkeypatch.setattr(
+        fish_kvcache_attn, "_triton_backend", lambda: pytest.fail("Triton backend must not load off CUDA")
+    )
+
+    assert not fish_kvcache_attn.is_available()
 
 
 @pytest.mark.parametrize("value", ["", "1", "true", "yes", "on", "required"])
@@ -182,7 +205,7 @@ def test_fish_kvcache_backend_wraps_only_model_instance(monkeypatch):
     metadata = _metadata()
     query = torch.zeros((2, 32, 128), dtype=torch.float16)
     output = torch.zeros_like(query)
-    kv_cache = torch.zeros((2, 8, 16, 8, 128), dtype=torch.float16)
+    kv_cache = _decode_kv_cache()
 
     result = model.layers[0].self_attn.attn.impl.forward(
         None,
@@ -201,6 +224,123 @@ def test_fish_kvcache_backend_wraps_only_model_instance(monkeypatch):
     assert fish_kvcache_backend.get_fish_kvcache_attn_stats()["small_hit_count"] == 1
 
 
+def _vllm_kv_cache_shape(num_blocks, block_size, num_kv_heads, head_size, dtype=torch.float16):
+    # Source of truth for the paged KV cache layout the backend must unpack.
+    # vLLM 0.29 removed AttentionBackend.get_kv_cache_shape; the per-layer shape
+    # now comes from the spec, with the content dim expressed in bytes.
+    from vllm.v1.kv_cache_interface import FullAttentionSpec, compute_layer_kv_cache_shape_bytes
+
+    spec = FullAttentionSpec(
+        block_size=block_size,
+        num_kv_heads=num_kv_heads,
+        head_size=head_size,
+        dtype=dtype,
+    )
+    num_pages, num_heads, num_states, content_bytes = compute_layer_kv_cache_shape_bytes(spec, num_blocks)
+    return (num_pages, num_heads, num_states, content_bytes // dtype.itemsize)
+
+
+def test_fish_kvcache_backend_unbinds_kv_on_vllm_cache_layout(monkeypatch):
+    # vLLM >=0.23.0 lays out the KV cache as (num_blocks, num_kv_heads,
+    # block_size, 2*head_size) with K and V packed in the last dimension.
+    # The backend must split on the content dim so each of key/value comes
+    # back as the 4-D (num_blocks, block_size, num_kv_heads, head_size)
+    # tensor the decode kernel expects.
+    monkeypatch.setenv("VLLM_OMNI_FISH_KVCACHE_ATTN", "1")
+    monkeypatch.setattr(fish_kvcache_backend, "is_available", lambda: True)
+    monkeypatch.setattr(fish_kvcache_backend, "load_error", lambda: None)
+    monkeypatch.setattr(fish_kvcache_backend, "can_use_fish_kvcache_attn", lambda **_: True)
+
+    num_blocks, block_size, num_kv_heads, head_size = 8, 16, 8, 128
+    cache_shape = _vllm_kv_cache_shape(num_blocks, block_size, num_kv_heads, head_size)
+    # Upstream now returns a 4-D packed shape: (B, H, N, 2*D).
+    assert cache_shape == (num_blocks, num_kv_heads, block_size, 2 * head_size)
+
+    captured = {}
+
+    def fake_decode(query, key_cache, value_cache, block_table, seq_lens, out, *, scale, max_seq_len):
+        del query, block_table, seq_lens, scale, max_seq_len
+        captured["key"] = tuple(key_cache.shape)
+        captured["value"] = tuple(value_cache.shape)
+        out.fill_(1)
+        return out
+
+    monkeypatch.setattr(fish_kvcache_backend, "fish_decode_kvcache_attn", fake_decode)
+
+    model = _FakeModel()
+    assert fish_kvcache_backend.install_fish_kvcache_attn_backend(model) == 1
+
+    query = torch.zeros((2, 32, head_size), dtype=torch.float16)
+    output = torch.zeros_like(query)
+    kv_cache = torch.zeros(cache_shape, dtype=torch.float16)
+
+    model.layers[0].self_attn.attn.impl.forward(None, query, None, None, kv_cache, _metadata(), output)
+
+    expected = (num_blocks, block_size, num_kv_heads, head_size)
+    assert captured["key"] == expected
+    assert captured["value"] == expected
+
+
+def test_fish_kvcache_vllm_cache_unbinds_then_falls_back_until_contiguous(monkeypatch):
+    # End-to-end with the real vLLM cache layout and the real (unmocked) guard.
+    #
+    # The point of the transpose+split fix: unbind(1) on the old 5-D layout
+    # raised "too many values to unpack" on the vLLM 0.23.0 layout, and the
+    # upstream now packs K/V into the last dimension (4-D shape). The
+    # transpose(1, 2) + split correctly unpacks into separate key/value tensors
+    # and the backend gracefully falls back to the original attention with
+    # correct output. This test guards that fix and must NOT depend on the fast
+    # path firing.
+    #
+    # It also documents a known limitation (tracked separately):
+    # transpose(1, 2) on the interleaved (B, H, N, 2*D) layout yields
+    # *non-contiguous* key/value views, which the guard rejects on the
+    # is_contiguous() check. So the dimensions are compatible (4-D,
+    # block_size=16, head_size=128) -- the only thing keeping the fast path
+    # from engaging is contiguity, not shape. Making the fast path actually
+    # fire would require a .contiguous() copy and is out of scope here.
+    fish_kvcache_backend.reset_fish_kvcache_attn_stats()
+    monkeypatch.setenv("VLLM_OMNI_FISH_KVCACHE_ATTN", "1")
+    monkeypatch.setattr(fish_kvcache_backend, "is_available", lambda: True)
+    monkeypatch.setattr(fish_kvcache_backend, "load_error", lambda: None)
+    monkeypatch.setattr(fish_kvcache_attn, "is_available", lambda: True)
+
+    num_blocks, block_size, num_kv_heads, head_size = 8, 16, 8, 128
+    cache_shape = _vllm_kv_cache_shape(num_blocks, block_size, num_kv_heads, head_size)
+
+    decode_calls = []
+
+    def fake_decode(*args, **kwargs):
+        del args, kwargs
+        decode_calls.append(True)
+
+    monkeypatch.setattr(fish_kvcache_backend, "fish_decode_kvcache_attn", fake_decode)
+
+    model = _FakeModel()
+    assert fish_kvcache_backend.install_fish_kvcache_attn_backend(model) == 1
+
+    query = torch.zeros((2, 32, head_size), dtype=torch.float16)
+    output = torch.zeros_like(query)
+    kv_cache = torch.zeros(cache_shape, dtype=torch.float16)
+
+    # Root cause record: transpose(1,2) + split gives the right 4-D shape but
+    # a non-contiguous view.
+    key_cache, value_cache = kv_cache.transpose(1, 2).split(head_size, dim=-1)
+    assert tuple(key_cache.shape) == (num_blocks, block_size, num_kv_heads, head_size)
+    assert not key_cache.is_contiguous()
+
+    # transpose+split no longer crashes (unbind(1) would have raised here) and
+    # the request completes via the correct fallback path.
+    result = model.layers[0].self_attn.attn.impl.forward(None, query, None, None, kv_cache, _metadata(), output)
+
+    assert result is output
+    assert decode_calls == []
+    assert model.layers[0].self_attn.attn.impl.original_calls == 1
+    assert torch.equal(output, torch.full_like(output, 2))
+    stats = fish_kvcache_backend.get_fish_kvcache_attn_stats()
+    assert stats["fallback_count_by_reason"] == {"guard_miss": 1}
+
+
 def test_fish_kvcache_backend_install_is_idempotent(monkeypatch):
     monkeypatch.setenv("VLLM_OMNI_FISH_KVCACHE_ATTN", "1")
     monkeypatch.setattr(fish_kvcache_backend, "is_available", lambda: True)
@@ -215,7 +355,7 @@ def test_fish_kvcache_backend_install_is_idempotent(monkeypatch):
 
     query = torch.zeros((2, 32, 128), dtype=torch.float16)
     output = torch.zeros_like(query)
-    kv_cache = torch.zeros((2, 8, 16, 8, 128), dtype=torch.float16)
+    kv_cache = _decode_kv_cache()
 
     model.layers[0].self_attn.attn.impl.forward(
         None,
@@ -250,7 +390,7 @@ def test_fish_kvcache_backend_falls_back_to_original_forward_on_guard_miss(monke
 
     query = torch.zeros((2, 32, 128), dtype=torch.float16)
     output = torch.zeros_like(query)
-    kv_cache = torch.zeros((2, 8, 16, 8, 128), dtype=torch.float16)
+    kv_cache = _decode_kv_cache()
 
     result = model.layers[0].self_attn.attn.impl.forward(
         None,
@@ -297,7 +437,7 @@ def test_fish_kvcache_backend_uses_decode_seq_lens_upper_bound(monkeypatch):
 
     query = torch.zeros((2, 32, 128), dtype=torch.float16)
     output = torch.zeros_like(query)
-    kv_cache = torch.zeros((2, 8, 16, 8, 128), dtype=torch.float16)
+    kv_cache = _decode_kv_cache()
 
     model.layers[0].self_attn.attn.impl.forward(
         None,
@@ -340,7 +480,7 @@ def test_fish_kvcache_backend_uses_cpu_upper_bound_above_metadata_max(monkeypatc
 
     query = torch.zeros((2, 32, 128), dtype=torch.float16)
     output = torch.zeros_like(query)
-    kv_cache = torch.zeros((2, 8, 16, 8, 128), dtype=torch.float16)
+    kv_cache = _decode_kv_cache()
 
     model.layers[0].self_attn.attn.impl.forward(
         None,
@@ -383,7 +523,7 @@ def test_fish_kvcache_backend_slices_upper_bound_by_active_batch(monkeypatch):
 
     query = torch.zeros((2, 32, 128), dtype=torch.float16)
     output = torch.zeros_like(query)
-    kv_cache = torch.zeros((2, 8, 16, 8, 128), dtype=torch.float16)
+    kv_cache = _decode_kv_cache()
 
     model.layers[0].self_attn.attn.impl.forward(
         None,
@@ -428,7 +568,7 @@ def test_fish_kvcache_backend_falls_back_on_short_upper_bound_shape(monkeypatch)
 
     query = torch.zeros((2, 32, 128), dtype=torch.float16)
     output = torch.zeros_like(query)
-    kv_cache = torch.zeros((2, 8, 16, 8, 128), dtype=torch.float16)
+    kv_cache = _decode_kv_cache()
 
     result = model.layers[0].self_attn.attn.impl.forward(
         None,
@@ -475,7 +615,7 @@ def test_fish_kvcache_backend_falls_back_on_non_cpu_upper_bound(monkeypatch):
 
     query = torch.zeros((2, 32, 128), dtype=torch.float16)
     output = torch.zeros_like(query)
-    kv_cache = torch.zeros((2, 8, 16, 8, 128), dtype=torch.float16)
+    kv_cache = _decode_kv_cache()
 
     result = model.layers[0].self_attn.attn.impl.forward(
         None,
@@ -509,7 +649,7 @@ def test_fish_kvcache_backend_required_rejects_non_cpu_upper_bound(monkeypatch):
 
     query = torch.zeros((2, 32, 128), dtype=torch.float16)
     output = torch.zeros_like(query)
-    kv_cache = torch.zeros((2, 8, 16, 8, 128), dtype=torch.float16)
+    kv_cache = _decode_kv_cache()
 
     with pytest.raises(RuntimeError, match="must be a CPU tensor"):
         model.layers[0].self_attn.attn.impl.forward(
@@ -539,7 +679,7 @@ def test_fish_kvcache_backend_required_rejects_underestimated_upper_bound(monkey
 
     query = torch.zeros((2, 32, 128), dtype=torch.float16)
     output = torch.zeros_like(query)
-    kv_cache = torch.zeros((2, 8, 16, 8, 128), dtype=torch.float16)
+    kv_cache = _decode_kv_cache()
 
     with pytest.raises(RuntimeError, match="underestimates"):
         model.layers[0].self_attn.attn.impl.forward(
@@ -569,7 +709,7 @@ def test_fish_kvcache_backend_required_rejects_missing_upper_bound(monkeypatch):
 
     query = torch.zeros((2, 32, 128), dtype=torch.float16)
     output = torch.zeros_like(query)
-    kv_cache = torch.zeros((2, 8, 16, 8, 128), dtype=torch.float16)
+    kv_cache = _decode_kv_cache()
 
     with pytest.raises(RuntimeError, match="requires seq_lens_cpu_upper_bound"):
         model.layers[0].self_attn.attn.impl.forward(
@@ -603,7 +743,7 @@ def test_fish_kvcache_backend_required_raises_on_guard_miss(monkeypatch):
 
     query = torch.zeros((2, 32, 128), dtype=torch.float16)
     output = torch.zeros_like(query)
-    kv_cache = torch.zeros((2, 8, 16, 8, 128), dtype=torch.float16)
+    kv_cache = _decode_kv_cache()
 
     with pytest.raises(RuntimeError, match="required"):
         model.layers[0].self_attn.attn.impl.forward(
@@ -629,7 +769,7 @@ def test_fish_kvcache_backend_required_allows_prefill_fallback(monkeypatch):
 
     query = torch.zeros((2, 32, 128), dtype=torch.float16)
     output = torch.zeros_like(query)
-    kv_cache = torch.zeros((2, 8, 16, 8, 128), dtype=torch.float16)
+    kv_cache = _decode_kv_cache()
 
     result = model.layers[0].self_attn.attn.impl.forward(
         None,
@@ -675,7 +815,7 @@ def test_fish_kvcache_backend_falls_back_without_cpu_upper_bound(monkeypatch):
 
     query = torch.zeros((2, 32, 128), dtype=torch.float16)
     output = torch.zeros_like(query)
-    kv_cache = torch.zeros((2, 8, 16, 8, 128), dtype=torch.float16)
+    kv_cache = _decode_kv_cache()
 
     result = model.layers[0].self_attn.attn.impl.forward(
         None,

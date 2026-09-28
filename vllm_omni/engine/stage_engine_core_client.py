@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+
 """
 Stage Engine Core Client for vLLM-Omni multi-stage runtime.
 
@@ -6,21 +9,17 @@ Directly inherits from vLLM's AsyncMPClient to reuse EngineCore architecture.
 
 from __future__ import annotations
 
-import contextlib
 import inspect
-import multiprocessing.connection
 import os
 import socket
-import threading
-import time
-import weakref
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
-import psutil
+import vllm.v1.engine as _vllm_engine_module
+import vllm.v1.engine.core_client as _vllm_core_client_module
 from vllm.logger import init_logger
 from vllm.v1.engine import EngineCoreRequest
-from vllm.v1.engine.core_client import AsyncMPClient, DPLBAsyncMPClient
+from vllm.v1.engine.core_client import AsyncMPClient, DPLBAsyncMPClient, MPClient
 from vllm.v1.engine.exceptions import EngineDeadError
 
 from vllm_omni.distributed.omni_connectors.utils.config import (
@@ -30,6 +29,7 @@ from vllm_omni.distributed.omni_connectors.utils.initialization import (
     KV_TRANSFER_PORT_OFFSET,
 )
 from vllm_omni.distributed.omni_connectors.utils.kv_utils import kv_zmq_port
+from vllm_omni.engine import OmniEngineCoreOutput, OmniEngineCoreOutputs
 from vllm_omni.engine.stage_client import StageClientBase
 from vllm_omni.engine.stage_init_utils import StageMetadata
 
@@ -39,8 +39,6 @@ if TYPE_CHECKING:
     from vllm_omni.inputs.data import OmniTokensPrompt
 
 logger = init_logger(__name__)
-
-SHUTDOWN_TIMEOUT_S = 5
 
 
 def _default_process_engine_inputs(
@@ -75,10 +73,8 @@ class StageEngineCoreClientBase(StageClientBase):
     - outputs_queue, output_queue_task
     - All utility methods (get_output_async, abort_requests_async, etc.)
 
-    The subprocess is spawned externally via ``spawn_stage_core`` /
-    ``complete_stage_handshake`` from *stage_engine_core_proc.py*.
-    In single-stage CLI mode, the client may instead attach to an
-    ``engine_manager`` / ``coordinator`` pair created elsewhere.
+    The stage engine subprocesses are owned by vLLM-style engine managers
+    (`resources.engine_manager`), matching `MPClient` ownership.
     """
 
     replica_id: int = 0
@@ -90,7 +86,6 @@ class StageEngineCoreClientBase(StageClientBase):
         log_stats: bool = False,
         metadata: StageMetadata | None = None,
         client_addresses: dict[str, str] | None = None,
-        proc: Any = None,
         engine_manager: Any = None,
         coordinator: Any = None,
         client_count: int = 1,
@@ -104,7 +99,6 @@ class StageEngineCoreClientBase(StageClientBase):
             log_stats=log_stats,
             metadata=metadata,
             client_addresses=client_addresses,
-            proc=proc,
             engine_manager=engine_manager,
             coordinator=coordinator,
             client_count=client_count,
@@ -122,7 +116,6 @@ class StageEngineCoreClientBase(StageClientBase):
         executor_class: type,
         log_stats: bool = False,
         client_addresses: dict[str, str] | None = None,
-        proc: Any = None,
         client_count: int = 1,
         client_index: int = 0,
         *,
@@ -137,10 +130,8 @@ class StageEngineCoreClientBase(StageClientBase):
         via helpers in stage_init_utils.py. This constructor just stores metadata
         and calls super().__init__().
 
-        The subprocess is spawned externally via ``spawn_stage_core`` /
-        ``complete_stage_handshake`` (see *stage_engine_core_proc.py*).
-        The resulting ``proc`` handle is passed in so this client can
-        manage the process lifecycle on shutdown.
+        The subprocess lifecycle is owned by the engine manager attached to
+        vLLM's background resources, not by this client directly.
         """
         # -------- Stage metadata (public fields used at runtime) --------
         self.replica_id = 0
@@ -148,24 +139,26 @@ class StageEngineCoreClientBase(StageClientBase):
             self.stage_id = metadata.stage_id
             self.replica_id = getattr(metadata, "replica_id", 0)
             self.stage_type = metadata.stage_type
-            self.engine_output_type = metadata.engine_output_type
+            self.model_stage = metadata.model_stage
             self.is_comprehension = metadata.is_comprehension
             self.requires_multimodal_data = metadata.requires_multimodal_data
             self.engine_input_source = metadata.engine_input_source
             self.final_output = metadata.final_output
             self.final_output_type = metadata.final_output_type
             self.default_sampling_params = metadata.default_sampling_params
+            self.prompt_transform_func = metadata.prompt_transform_func
+            self.prompt_expand_func = metadata.prompt_expand_func
             self.custom_process_input_func = metadata.custom_process_input_func
-            self.model_stage = metadata.model_stage
 
         self.engine_outputs: Any = None
-        self._proc = proc
-        self._shutting_down = False
         self.client_addresses = dict(client_addresses or {})
+        self.vllm_config = vllm_config
         self._omni_kv_config = getattr(getattr(vllm_config, "model_config", None), "omni_kv_config", None)
+        self._stage_hf_config = getattr(getattr(vllm_config, "model_config", None), "hf_config", None)
         self._kv_sender_host = self._resolve_contact_host()
         self._kv_sender_info: dict[str, Any] | None = None
         self._kv_sender_initialized = False
+        self._payload_sender_info: dict[str, Any] | None = None
 
         client_name = self.__class__.__name__
         logger.info(
@@ -174,6 +167,21 @@ class StageEngineCoreClientBase(StageClientBase):
             self.stage_id,
             self.replica_id,
         )
+
+        # Patch the output decoder type so the client decodes
+        # OmniEngineCoreOutputs (which carries multimodal_output per
+        # EngineCoreOutput) instead of the base EngineCoreOutputs.
+        # Must happen BEFORE super().__init__() which creates the decoder.
+        # TODO: Add a defensive assertion after super().__init__() to verify
+        # the decoder uses OmniEngineCoreOutputs, catching import-order regressions.
+        _vllm_engine_module.EngineCoreOutput = OmniEngineCoreOutput
+        _vllm_engine_module.EngineCoreOutputs = OmniEngineCoreOutputs
+        _vllm_core_client_module.EngineCoreOutputs = OmniEngineCoreOutputs
+        logger.debug(
+            "[StageEngineCoreClient] Patched EngineCoreOutputs -> %s",
+            _vllm_core_client_module.EngineCoreOutputs,
+        )
+
         try:
             super().__init__(
                 vllm_config,
@@ -185,6 +193,7 @@ class StageEngineCoreClientBase(StageClientBase):
             )
             if engine_manager is not None:
                 self.resources.engine_manager = engine_manager
+                self.start_engine_core_monitor()
             if coordinator is not None:
                 self.resources.coordinator = coordinator
         except Exception:
@@ -207,9 +216,7 @@ class StageEngineCoreClientBase(StageClientBase):
             raise
 
         self._initialize_kv_sender_endpoint()
-
-        if self._proc is not None:
-            self._start_proc_monitor()
+        self._payload_sender_info = self._build_payload_sender_info()
 
         logger.info(
             "[%s] stage-%s [rep-%s] EngineCore running",
@@ -217,64 +224,6 @@ class StageEngineCoreClientBase(StageClientBase):
             self.stage_id,
             self.replica_id,
         )
-
-    def _start_proc_monitor(self) -> None:
-        """Start a daemon thread that watches the subprocess sentinel.
-
-        When the subprocess dies without sending the ZMQ ``ENGINE_CORE_DEAD``
-        sentinel (e.g. SIGKILL, segfault, OOM-killer), this thread sets
-        ``resources.engine_dead`` so subsequent calls raise
-        ``EngineDeadError``.
-        """
-        proc = self._proc
-        resources_ref = weakref.ref(self.resources)
-        stage_id = self.stage_id
-        replica_id = self.replica_id
-
-        def _monitor() -> None:
-            try:
-                multiprocessing.connection.wait([proc.sentinel])
-            except Exception:
-                return
-
-            # Give multiprocessing a brief chance to publish a stable exitcode
-            # before emitting the monitor log. Without this, the sentinel can
-            # fire first and the log may misleadingly print ``None``.
-            with contextlib.suppress(Exception):
-                proc.join(timeout=0)
-            exitcode = proc.exitcode
-            if exitcode is None:
-                deadline = time.monotonic() + 0.2
-                while exitcode is None and time.monotonic() < deadline:
-                    time.sleep(0.01)
-                    with contextlib.suppress(Exception):
-                        proc.join(timeout=0)
-                    exitcode = proc.exitcode
-
-            resources = resources_ref()
-            if resources is None or resources.engine_dead or self._shutting_down:
-                return
-            if exitcode == 0:
-                logger.info(
-                    "[StageEngineCoreClient] stage-%s [rep-%s] subprocess exited cleanly.",
-                    stage_id,
-                    replica_id,
-                )
-                return
-            resources.engine_dead = True
-            logger.error(
-                "[StageEngineCoreClient] stage-%s [rep-%s] subprocess died unexpectedly (exit code %s).",
-                stage_id,
-                replica_id,
-                exitcode,
-            )
-
-        t = threading.Thread(
-            target=_monitor,
-            daemon=True,
-            name=f"StageCoreProcMonitor-{stage_id}",
-        )
-        t.start()
 
     def check_health(self) -> None:
         """Raise ``EngineDeadError`` if the stage subprocess is dead.
@@ -284,15 +233,15 @@ class StageEngineCoreClientBase(StageClientBase):
         """
         if self.resources.engine_dead:
             raise EngineDeadError(f"Stage-{self.stage_id} engine core is dead")
-        if self._proc is not None and not self._proc.is_alive():
-            self.resources.engine_dead = True
-            raise EngineDeadError(f"Stage-{self.stage_id} subprocess is not alive (exit code {self._proc.exitcode})")
+
+    def _apply_ready_response(self, payload: bytes) -> None:
+        MPClient._apply_ready_response(self, payload)
 
     # ==================== Overrides ====================
 
     async def add_request_async(self, request: EngineCoreRequest) -> None:
         """Add request to the stage engine core."""
-        logger.info(
+        logger.debug(
             "[%s] stage-%s [rep-%s] add request: %s",
             self.__class__.__name__,
             self.stage_id,
@@ -317,7 +266,16 @@ class StageEngineCoreClientBase(StageClientBase):
                 return None
 
     def _resolve_contact_host(self) -> str | None:
-        """Resolve a routable host for this stage from its client addresses."""
+        """Resolve a routable host for this stage from its client addresses.
+
+        For remote LLM replicas the ZMQ sockets are bound on the head node,
+        so the ZMQ addresses contain the head's IP. The ``replica_host`` key
+        (injected by DistStageRuntime) carries the actual replica IP where
+        the KV connector binds — prefer it when available.
+        """
+        replica_host = self.client_addresses.get("replica_host")
+        if replica_host:
+            return replica_host
         for key in ("input_address", "output_address", "stats_update_address"):
             address = self.client_addresses.get(key)
             if not address:
@@ -341,6 +299,57 @@ class StageEngineCoreClientBase(StageClientBase):
         if not isinstance(connector_config, dict):
             return None
         return connector_config
+
+    def _build_payload_sender_info(self) -> dict[str, Any] | None:
+        model_config = getattr(self.vllm_config, "model_config", None)
+        connector_config = getattr(model_config, "stage_connector_config", None)
+        extra = connector_config.get("extra") if isinstance(connector_config, dict) else None
+        outgoing = extra.get("outgoing") if isinstance(extra, dict) else None
+
+        # An intermediate stage's outgoing listener is independent of its
+        # incoming KV endpoint. Never advertise the upstream sender here.
+        sender_info = getattr(self, "_kv_sender_info", None)
+        if not isinstance(outgoing, dict) and isinstance(sender_info, dict):
+            sender_host = sender_info.get("host")
+            sender_port = sender_info.get("zmq_port")
+            if sender_host is not None and sender_port is not None:
+                return {
+                    "host": str(sender_host),
+                    "zmq_port": int(sender_port) - KV_TRANSFER_PORT_OFFSET,
+                }
+
+        kv_connector_config = self._get_kv_connector_config()
+        if isinstance(outgoing, dict):
+            extra = outgoing
+            base_port = extra.get("zmq_port", 50051)
+        else:
+            if not isinstance(extra, dict) or extra.get("role") != "sender":
+                extra = kv_connector_config
+            if not isinstance(extra, dict) or extra.get("role") != "sender":
+                return None
+            base_port = extra.get("zmq_port", 50051)
+            kv_port = kv_connector_config.get("zmq_port") if isinstance(kv_connector_config, dict) else None
+            if kv_port is not None:
+                base_port = int(os.path.expandvars(str(kv_port))) - KV_TRANSFER_PORT_OFFSET
+        if base_port is None:
+            return None
+        sender_host = self._resolve_sender_host_from_config(extra)
+        if sender_host is None:
+            return None
+        from vllm_omni.distributed.omni_connectors.utils.initialization import compute_connector_zmq_port
+
+        return {
+            "host": sender_host,
+            "zmq_port": compute_connector_zmq_port(
+                int(os.path.expandvars(str(base_port))),
+                purpose="request_forwarding",
+                from_stage=int(extra.get("from_stage", self.stage_id)),
+                replica_id=self.replica_id,
+            ),
+        }
+
+    def get_payload_sender_info(self) -> dict[str, Any] | None:
+        return dict(self._payload_sender_info) if self._payload_sender_info is not None else None
 
     def _resolve_sender_host_from_config(self, connector_config: dict[str, Any]) -> str | None:
         host = connector_config.get("sender_host") or connector_config.get("host")
@@ -447,23 +456,53 @@ class StageEngineCoreClientBase(StageClientBase):
         and the original prompt.
         """
         if self.custom_process_input_func is not None:
-            signature = inspect.signature(self.custom_process_input_func)
-            if len(signature.parameters) >= 4:
-                return self.custom_process_input_func(
-                    source_outputs,
-                    prompt,
-                    self.requires_multimodal_data,
-                    streaming_context,
-                )
-            return self.custom_process_input_func(
-                source_outputs,
-                prompt,
-                self.requires_multimodal_data,
-            )
+            return self._call_custom_process_input(source_outputs, prompt, streaming_context)
 
         if not self.engine_input_source:
             raise ValueError(f"engine_input_source empty for stage {self.stage_id}")
         return _default_process_engine_inputs(source_outputs, prompt, self.requires_multimodal_data)
+
+    def _call_custom_process_input(
+        self,
+        source_outputs: list[Any],
+        prompt: Any,
+        streaming_context: Any | None,
+    ) -> list[OmniTokensPrompt]:
+        """Call a stage input processor with its explicitly requested context."""
+        processor = self.custom_process_input_func
+        assert processor is not None
+        signature = inspect.signature(processor)
+        extra_kwargs: dict[str, Any] = {}
+        if "next_stage_hf_config" in signature.parameters:
+            # Let a processor size the next stage's prompt from that
+            # stage's model config (e.g. a talker whose engine positions
+            # must cover a speaker-prompt prefill).
+            extra_kwargs["next_stage_hf_config"] = self._stage_hf_config
+        target_model_config = signature.parameters.get("target_model_config")
+        if target_model_config is not None:
+            # The JoyAI bridge needs the Talker tokenizer and model config
+            # to calculate the exact prompt length.
+            if target_model_config.kind is not inspect.Parameter.KEYWORD_ONLY:
+                raise TypeError("target_model_config must be a keyword-only parameter")
+            extra_kwargs["target_model_config"] = self.vllm_config.model_config
+        # Match the context parameter by name, including the
+        # underscore-prefixed spelling some processors use (e.g.
+        # MiniCPM-o's ``llm2tts(..., _streaming_context)``), so bridge
+        # state keeps flowing to them.
+        if "streaming_context" in signature.parameters or "_streaming_context" in signature.parameters:
+            return processor(
+                source_outputs,
+                prompt,
+                self.requires_multimodal_data,
+                streaming_context,
+                **extra_kwargs,
+            )
+        return processor(
+            source_outputs,
+            prompt,
+            self.requires_multimodal_data,
+            **extra_kwargs,
+        )
 
     async def collective_rpc_async(
         self,
@@ -484,41 +523,6 @@ class StageEngineCoreClientBase(StageClientBase):
             args=args,
             kwargs=kwargs,
         )
-
-    def shutdown(self, timeout: float | None = None) -> None:
-        """Shutdown managed resources and any externally spawned subprocess."""
-        self._shutting_down = True
-        child_procs: list[psutil.Process] = []
-        if self._proc is not None and self._proc.pid is not None:
-            try:
-                child_procs = psutil.Process(self._proc.pid).children(recursive=True)
-            except psutil.Error:
-                child_procs = []
-
-        try:
-            super().shutdown(timeout=timeout)
-        finally:
-            if self._proc is not None and self._proc.is_alive():
-                self._proc.terminate()
-                self._proc.join(timeout=SHUTDOWN_TIMEOUT_S)
-                if self._proc.is_alive():
-                    self._proc.kill()
-                    self._proc.join(timeout=SHUTDOWN_TIMEOUT_S)
-
-            alive_children = [proc for proc in child_procs if proc.is_running()]
-            for proc in alive_children:
-                try:
-                    proc.terminate()
-                except psutil.Error:
-                    pass
-            _, still_alive = psutil.wait_procs(alive_children, timeout=SHUTDOWN_TIMEOUT_S)
-            for proc in still_alive:
-                try:
-                    proc.kill()
-                except psutil.Error:
-                    pass
-            # The process handle is no longer reliable after best-effort cleanup.
-            self._proc = None
 
 
 class StageEngineCoreClient(StageEngineCoreClientBase, AsyncMPClient):

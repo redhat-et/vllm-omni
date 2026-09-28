@@ -89,10 +89,53 @@ and
 | Model | Scope | Status |
 |-------|-------|--------|
 | Qwen3-Omni | Thinker language-model stage | ModelOpt FP8 checkpoint path |
+| Qwen3-Omni | Thinker language-model stage (W4A4 NVFP4) | Validated; see [Qwen3-Omni NVFP4 W4A4](#qwen3-omni-nvfp4-w4a4-thinker) below |
 | Qwen3-TTS | TTS language-model stage | Not validated |
 
 Audio encoder, vision encoder, talker, and code2wav stages stay in BF16 unless
 a model-specific guide documents otherwise.
+
+#### Qwen3-Omni NVFP4 W4A4 (thinker)
+
+vLLM-Omni serves ModelOpt NVFP4 W4A4 quantizations of the
+Qwen3-Omni-30B-A3B-Instruct thinker language model. The thinker text body
+(attention + MoE experts) is quantized to NVFP4 with FP8 per-tensor input
+scales; the audio encoder, vision encoder, talker, and code2wav stay in BF16.
+
+| Variant | HF checkpoint | Hardware |
+|---------|---------------|----------|
+| W4A4 NVFP4 (full thinker) | `YihongJin/Qwen3-Omni-30B-A3B-Instruct-NVFP4-W4A4-full-thinker-awqclip` | sm_100+ (Blackwell, FlashInfer FP4 GEMM) |
+
+Calibration uses ModelOpt `mtq.NVFP4_DEFAULT_CFG` with the `awq_clip` algorithm
+on 1024 ultrachat samples chat-templated through the Qwen3-Omni tokenizer.
+Excluded modules: `*audio_tower*`, `*visual*`, `*talker*`, `*code2wav*`,
+`*lm_head*`, `*mlp.gate*`. See `scripts/nvfp4/calibrate.py` for the reference
+recipe.
+
+!!! note "ModelOpt 0.44 NaN regression workaround"
+    ModelOpt 0.44's float32 -> FP8 E4M3 cast of per-block weight scales
+    occasionally emits literal NaN bytes (E4M3 encoding 0x7F / 0xFF) for
+    blocks whose pre-cast scale rounds above the FP8 max of 448 after the
+    global-scale division. A single NaN byte in any `weight_scale`
+    propagates through the FP4 GEMM and collapses the served model output
+    to `!!!!`. vLLM-Omni's `vllm_omni.patch` installs a defensive override
+    of `ModelOptNvFp4LinearMethod.process_weights_after_loading` that
+    clamps these bytes to the FP8 E4M3 max at load time. The override
+    self-extinguishes once vllm-omni's vllm pin moves to a release
+    containing the upstream fix. Set `VLLM_OMNI_SKIP_NVFP4_NAN_CLAMP=1`
+    to disable the override for diagnostics.
+
+Serving:
+
+```bash
+vllm serve YihongJin/Qwen3-Omni-30B-A3B-Instruct-NVFP4-W4A4-full-thinker-awqclip \
+    --omni --port 8000
+```
+
+> Do **not** pass `--enforce-eager` for production / benchmarks. CUDA graphs
+> amortize launch overhead and unlock the FP4 throughput wins; with
+> `--enforce-eager` set, W4A4 TPOT degrades ~10x relative to the CUDA-graph
+> configuration.
 
 ### Multi-Stage Diffusion Model
 
@@ -160,6 +203,91 @@ omni = Omni(
 | `force_cutlass_fp8` / `--force-cutlass-fp8` | bool | `False` | Force CUTLASS FP8 linear kernels for supported ModelOpt FP8 diffusion stages on CUDA SM89+ |
 | `--linear-backend cutlass` | str | auto | Select the validated CUTLASS linear backend for supported ModelOpt NVFP4 or mixed FP8/NVFP4 diffusion stages |
 | `--moe-backend cutlass` | str | auto | Select the validated CUTLASS MoE backend for supported ModelOpt mixed MoE checkpoints |
+
+## Cosmos3 Mixed-Precision Schedule
+
+The experimental Cosmos3 schedule can use the checkpoint-native quantized GEMM for middle denoising
+steps and dense 16-bit activation execution for selected first and last steps.
+The schedule supports serialized ModelOpt FP8 and NVFP4 checkpoints:
+
+| Detected weight format | Native middle steps | A16 boundary steps |
+|------------------------|---------------------|--------------------|
+| FP8 | W8A8 | W8A16 |
+| NVFP4 | W4A4 | W4A16 |
+
+The native and A16 paths share one quantized weight representation. The A16
+path dequantizes the live backend weight and calls `F.linear`; it does not keep
+a second checkpoint-weight snapshot. Scheduled FP8 currently requires
+serialized tensorwise scales and a backend that retains canonical FP8 weights.
+Scheduled NVFP4 requires a supported CUTLASS-compatible native or FlashInfer
+layout. SmoothQuant, Marlin-repacked FP8, and per-channel/per-token FP8
+schedules fail closed.
+
+The reasoner uses dense A16 execution by default when its weights are FP8 or
+NVFP4. Set the nested `reasoner` field to `native` to retain the checkpoint-native
+W8A8/W4A4 path. A BF16 reasoner remains BF16 in either mode. The schedule
+currently requires tensor parallel size 1 and one active request per worker,
+does not support HSDP, and does not support block-scaled FP8. Its live-weight
+design is compatible with model-level and standard layer-wise offload, but
+those paths still require GPU end-to-end validation. Distributed layer-wise
+offload is rejected because its direct loader bypasses ModelOpt post-load
+transformations.
+
+A checkpoint can opt in by adding a versioned policy to its authoritative
+`transformer/config.json`. The same policy schema is used for FP8 and NVFP4:
+
+```json
+{
+  "quantization_config": {
+    "quant_method": "modelopt",
+    "quant_algo": "FP8",
+    "runtime": {
+      "diffusion_step_policy": {
+        "schema_version": 1,
+        "type": "first_last_n",
+        "index_space": "denoising_loop_iteration",
+        "scope": ["transformer"],
+        "default_mode": "native",
+        "first_steps": {"count": 3, "mode": "a16"},
+        "last_steps": {"count": 3, "mode": "a16"},
+        "overlap": "a16",
+        "reasoner": "a16"
+      }
+    }
+  }
+}
+```
+
+The example preserves the checkpoint's existing `quant_method` and
+`quant_algo`; only `runtime` is added.
+
+When present and valid, the checkpoint policy is the default. An explicit
+runtime object overrides it. To retain ordinary checkpoint-native execution
+for every step, disable only the schedule:
+
+```bash
+vllm serve /path/to/Cosmos3-Nano-modelopt \
+  --omni \
+  --additional-config '{"cosmos3_mixed_precision":{"enabled":false}}'
+```
+
+This does not disable checkpoint quantization; it prevents installation of the
+mixed-step runtime.
+
+```bash
+vllm serve /path/to/Cosmos3-Nano-modelopt \
+  --omni \
+  --additional-config \
+  '{"cosmos3_mixed_precision":{"first_steps":3,"last_steps":3,"reasoner":"a16"}}'
+```
+
+The presence of `cosmos3_mixed_precision` supplies an explicit runtime
+override; an empty object uses the defaults shown above.
+The schedule uses vLLM's selected native backend and fails during loading if
+its live weight layout cannot support A16 dequantization.
+The runtime selects FP8 or NVFP4 from the checkpoint's ModelOpt configuration.
+BF16 linears are untouched. Mixed FP8/NVFP4 checkpoints are not supported by
+this schedule.
 
 ## Validation and Notes
 

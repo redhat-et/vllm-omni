@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Stage 1 (codec decoder) for higgs-audio v2.
 
 Two surfaces exposed:
@@ -41,6 +41,7 @@ from vllm_omni.model_executor.models.higgs_audio_v2.higgs_audio_decoder import (
     load_higgs_audio_codec,
 )
 from vllm_omni.model_executor.models.output_templates import OmniOutput
+from vllm_omni.platforms import current_omni_platform
 
 __all__ = [
     "HiggsAudioV2Code2Wav",
@@ -173,7 +174,7 @@ class HiggsAudioV2Code2Wav(nn.Module):
         2. Otherwise fall back to ``<model_dir>/<audio_tokenizer_subdir>``.
         """
         if device is None:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            device = current_omni_platform.get_torch_device()
         audio_tokenizer_path = self._resolve_audio_tokenizer_path(model_dir)
         quantizer, fc2, acoustic_decoder, _tokenizer_config = load_higgs_audio_codec(audio_tokenizer_path, device)
         if len(quantizer.quantizers) != self.num_codebooks:
@@ -230,9 +231,9 @@ class HiggsAudioV2Code2Wav(nn.Module):
                 if os.path.isfile(os.path.join(candidate, "config.json")):
                     return candidate
 
-        from huggingface_hub import snapshot_download
+        from vllm_omni.transformers_utils.repo_utils import hf_api
 
-        return snapshot_download(repo_id=repo_id)
+        return hf_api().snapshot_download(repo_id=repo_id)
 
     # ------------------------------------------------------ direct decode API
     @torch.inference_mode()

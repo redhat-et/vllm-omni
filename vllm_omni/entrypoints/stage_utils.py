@@ -1,7 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+
 from __future__ import annotations
 
 import logging
 import os
+from dataclasses import asdict, is_dataclass
 from multiprocessing import shared_memory as _shm
 from typing import Any
 
@@ -10,10 +14,47 @@ from vllm_omni.platforms import current_omni_platform
 
 logger = logging.getLogger(__name__)
 
+# Default for ``visible_baseline``: read the live device-control env var.
+# Explicit ``None`` means the caller captured an unset env and must not fall
+# back to a later thread's temporary CUDA_VISIBLE_DEVICES.
+_LIVE_DEVICE_ENV = object()
+
+
+def resolve_stage_physical_devices(
+    stage_id: int,
+    devices: str | int | None,
+    *,
+    visible_baseline: str | None | object = _LIVE_DEVICE_ENV,
+) -> str | None:
+    """Map logical stage devices to physical IDs without mutating process env.
+
+    ``visible_baseline`` is the device-control env captured at the start of
+    replica init. Pass the captured string, or ``None`` when that env was
+    unset. Omitting the argument reads the live env (single-threaded callers).
+
+    Parallel stage init must pass the captured value: another thread may have
+    already narrowed ``CUDA_VISIBLE_DEVICES`` for a different stage.
+    """
+    if devices in (None, "cpu"):
+        return None
+
+    if not isinstance(devices, (int, str)):
+        raise TypeError(f"Expected str or int device IDs for stage initialization, got type {type(devices)}")
+
+    device_list = _parse_device_list(devices)
+    env_var = current_omni_platform.device_control_env_var
+    visible_devices = os.environ.get(env_var) if visible_baseline is _LIVE_DEVICE_ENV else visible_baseline
+    if visible_devices is not None:
+        visible_device_list = _parse_device_list(visible_devices)
+        device_list = _map_device_list(stage_id, device_list, visible_device_list)
+    return ",".join(device_list)
+
 
 def set_stage_devices(
     stage_id: int,
     devices: str | int | None,
+    *,
+    visible_baseline: str | None | object = _LIVE_DEVICE_ENV,
 ) -> str | None:
     """Configure per-stage device visibility and current device (CUDA or NPU).
 
@@ -42,19 +83,18 @@ def set_stage_devices(
         The list of physical devices that were set for the given stage
         or None if we have no passed devices / are using cpu.
     """
-    env_var = current_omni_platform.device_control_env_var
-    vis = os.environ.get(env_var)
-
     if devices in (None, "cpu"):
         logger.debug("[Stage-%s] Using default device visibility (devices=%s)", stage_id, devices)
         return None
 
     elif isinstance(devices, (int, str)):
-        device_list = _parse_device_list(devices)
-        if vis is not None:
-            visible_device_list = _parse_device_list(vis)
-            device_list = _map_device_list(stage_id, device_list, visible_device_list)
-        device_str = ",".join(device_list)
+        device_str = resolve_stage_physical_devices(
+            stage_id,
+            devices,
+            visible_baseline=visible_baseline,
+        )
+        if device_str is None:
+            return None
         current_omni_platform.set_device_control_env_var(device_str)
         return device_str
 
@@ -238,6 +278,8 @@ def _to_dict(x: Any) -> dict[str, Any]:
     try:
         if isinstance(x, dict):
             return dict(x)
+        if is_dataclass(x) and not isinstance(x, type):
+            return asdict(x)
         return _omega_to_dict(x)
     except Exception:
         try:

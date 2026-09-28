@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+
 """
 Stage Core Process for vLLM-Omni V1 architecture.
 
@@ -10,37 +13,31 @@ from __future__ import annotations
 import contextlib
 import os
 import signal
-from multiprocessing.process import BaseProcess
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-import msgspec
-import zmq
+import vllm.v1.engine.core as _vllm_engine_core_module
 from vllm.logger import init_logger
 from vllm.transformers_utils.config import (
     maybe_register_config_serialize_by_value,
 )
-from vllm.utils.network_utils import get_open_zmq_ipc_path, zmq_socket_ctx
 from vllm.utils.system_utils import (
     decorate_logs,
-    get_mp_context,
     set_process_title,
 )
 from vllm.v1.engine import EngineCoreRequestType
 from vllm.v1.engine.core import EngineCoreProc, EngineShutdownState
 from vllm.v1.engine.utils import (
-    EngineHandshakeMetadata,
     EngineZmqAddresses,
     SignalCallback,
-    get_engine_zmq_addresses,
 )
-from vllm.v1.utils import shutdown
+from vllm.v1.executor.uniproc_executor import UniProcExecutor
 
-from vllm_omni.distributed.omni_coordinator import OmniCoordClientForStage
-from vllm_omni.engine.stage_init_utils import set_death_signal
-
-if TYPE_CHECKING:
-    from vllm.config import VllmConfig
-    from vllm.v1.executor import Executor
+from vllm_omni.distributed.omni_coordinator import create_stage_coord_client
+from vllm_omni.engine import OmniEngineCoreRequest
+from vllm_omni.engine.stage_init_utils import (
+    maybe_apply_cfg_scheduler_patches,
+    set_death_signal,
+)
 
 logger = init_logger(__name__)
 
@@ -48,9 +45,73 @@ logger = init_logger(__name__)
 _SIGNAL_EXIT_BASE = 128
 
 
+def _install_phase_locks(kwargs: dict[str, Any], local_dp_rank: int) -> None:
+    """Wrap ``kwargs["executor_class"]`` with the SH/EX phase-lock guard.
+
+    Fail-closed: ``parallel_stage_init`` promises that every memory-mutating
+    init phase in this child runs under the per-device locks, so a missing
+    ``vllm_config`` or ``executor_class`` must abort the launch rather than
+    silently proceed with an unguarded parallel initialization.
+    """
+    from vllm_omni.engine.stage_phase_lock import (
+        DevicePhaseLock,
+        wrap_executor_with_phase_locks,
+    )
+
+    missing = [key for key in ("vllm_config", "executor_class") if kwargs.get(key) is None]
+    if missing:
+        raise RuntimeError(
+            f"parallel_stage_init is enabled but EngineCore kwargs are missing {missing}, "
+            "so the SH/EX phase-lock guard cannot be installed. Refusing to run an "
+            "unguarded parallel initialization; fix the launch plumbing or disable "
+            "parallel_stage_init."
+        )
+    locker = DevicePhaseLock.from_child(kwargs["vllm_config"], local_dp_rank)
+    kwargs["executor_class"] = wrap_executor_with_phase_locks(kwargs["executor_class"], locker)
+    logger.info(
+        "[StageEngineCoreProc] parallel_stage_init: SH/EX phase locks on devices %s",
+        locker.device_ids,
+    )
+
+
 def _signal_exit_code(signum: int) -> int:
     """Return the conventional process exit code for signal-driven exits."""
     return _SIGNAL_EXIT_BASE + signum
+
+
+def _bind_first_audio_sink(model_executor: Any, output_queue: Any, scheduler: Any) -> bool:
+    """Let a TP1 in-process runner that decodes first audio deliver it as its own output."""
+    if not isinstance(model_executor, UniProcExecutor):
+        return False
+    worker = getattr(getattr(model_executor, "driver_worker", None), "worker", None)
+    model_runner = getattr(worker, "model_runner", None)
+    model_state = getattr(model_runner, "model_state", None)
+    model = getattr(model_runner, "model", None)
+    if getattr(model, "first_frame_decoder", None) is None or not hasattr(model_state, "set_first_audio_sink"):
+        return False
+    from vllm_omni.worker_v2.first_audio_sender import engine_output_queue_sink
+
+    assert model_state is not None
+    model_state.set_first_audio_sink(engine_output_queue_sink(output_queue, scheduler))
+    return True
+
+
+def _bind_native_data_plane_ready_sink(model_executor: Any, scheduler: Any) -> bool:
+    """Bind the TP1 in-process runner control plane directly to its scheduler."""
+    if not isinstance(model_executor, UniProcExecutor):
+        return False
+    parallel_config = model_executor.vllm_config.parallel_config
+    if parallel_config.tensor_parallel_size != 1 or parallel_config.pipeline_parallel_size != 1:
+        return False
+    driver_worker = getattr(model_executor, "driver_worker", None)
+    worker = getattr(driver_worker, "worker", None)
+    model_runner = getattr(worker, "model_runner", None)
+    data_plane = getattr(model_runner, "_omni_data_plane", None)
+    sink = getattr(scheduler, "enqueue_omni_connector_output", None)
+    if data_plane is None or not callable(sink):
+        return False
+    data_plane.set_omni_connector_output_sink(sink)
+    return True
 
 
 class StageEngineCoreProc(EngineCoreProc):
@@ -61,6 +122,20 @@ class StageEngineCoreProc(EngineCoreProc):
     ``EngineCoreProc.run_engine_core()``.
     """
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        _bind_first_audio_sink(self.model_executor, self.output_queue, self.scheduler)
+        if _bind_native_data_plane_ready_sink(self.model_executor, self.scheduler):
+            logger.info("Bound native MRv2 connector readiness directly to the scheduler inbox.")
+
+    def preprocess_add_request(self, request: OmniEngineCoreRequest) -> tuple[Any, int]:
+        """Preserve omni payloads when vLLM builds its scheduler request."""
+        scheduler_request, current_wave = super().preprocess_add_request(request)
+        scheduler_request.additional_information = request.additional_information
+        scheduler_request.external_req_id = getattr(request, "external_req_id", request.request_id)
+        scheduler_request.payload_sender_info = getattr(request, "payload_sender_info", None)
+        return scheduler_request, current_wave
+
     @staticmethod
     def run_stage_core(
         *args: Any,
@@ -69,6 +144,7 @@ class StageEngineCoreProc(EngineCoreProc):
         omni_coordinator_address: str | None = None,
         omni_stage_id: int | None = None,
         omni_replica_id: int = 0,
+        omni_parallel_stage_init: bool = False,
         **kwargs: Any,
     ) -> None:
         """Launch StageEngineCoreProc busy loop in background process.
@@ -89,8 +165,22 @@ class StageEngineCoreProc(EngineCoreProc):
         signal_callback: SignalCallback | None = None
         maybe_register_config_serialize_by_value()
 
+        # Register vllm-omni reasoning parsers (e.g. step_audio) in this
+        # subprocess so they are available when the engine core resolves
+        # ``--reasoning-parser``.  The main process already registered them
+        # at import time, but the forked subprocess starts with a fresh
+        # ReasoningParserManager.
+        try:
+            import vllm_omni.reasoning  # noqa: F401
+        except ImportError:
+            logger.warning(
+                "Failed to import vllm_omni.reasoning in subprocess; "
+                "custom reasoning parsers (e.g. step_audio) will not be "
+                "available."
+            )
+
         engine_core: StageEngineCoreProc | None = None
-        coord_client: OmniCoordClientForStage | None = None
+        coord_client = None
         try:
             # NOTE: previous revisions hardcoded data_parallel_size=1 here
             # (TODO referencing issue #984). The hardcoding has been removed
@@ -107,6 +197,32 @@ class StageEngineCoreProc(EngineCoreProc):
             # Setting this env var allows the same graceful fallback to work.
             os.environ.setdefault("FLASHINFER_DISABLE_VERSION_CHECK", "1")
             os.environ["VLLM_OMNI_REPLICA_ID"] = str(max(int(omni_replica_id), 0))
+
+            # Patch the decoder type so process_input_sockets (started
+            # during __init__) decodes OmniEngineCoreRequest (which
+            # carries additional_information) instead of the base
+            # EngineCoreRequest.  Must happen BEFORE __init__ because
+            # the IO thread creates MsgpackDecoder(EngineCoreRequest)
+            # during __init__.
+            _vllm_engine_core_module.EngineCoreRequest = OmniEngineCoreRequest
+            logger.debug(
+                "[StageEngineCoreProc] Patched EngineCoreRequest -> OmniEngineCoreRequest: %s",
+                _vllm_engine_core_module.EngineCoreRequest,
+            )
+
+            # CFG pairing scheduler patches must land before EngineCore builds
+            # its Scheduler; gated on the stage's logits_processors and its
+            # default sampling extra_args.
+            maybe_apply_cfg_scheduler_patches(kwargs.get("vllm_config"))
+
+            # When parallel stage init is enabled, wrap this driver's executor
+            # so its memory-mutating phases (load / KV alloc / capture) hold a
+            # per-device LOCK_SH and its profiling measurement holds LOCK_EX.
+            # The wrapper must be installed here (in the engine-core child):
+            # phase boundaries live inside EngineCore.__init__, invisible to the
+            # orchestrator. See vllm_omni.engine.stage_phase_lock.
+            if omni_parallel_stage_init:
+                _install_phase_locks(kwargs, local_dp_rank)
 
             engine_core = StageEngineCoreProc(
                 *args,
@@ -126,28 +242,16 @@ class StageEngineCoreProc(EngineCoreProc):
                         "EngineCore handshake did not populate input/output addresses; "
                         "cannot start OmniCoordClientForStage"
                     )
-                coord_client = OmniCoordClientForStage(
+                scheduler = getattr(engine_core, "scheduler", None)
+                if scheduler is None:
+                    raise RuntimeError("EngineCore scheduler is not initialized")
+                coord_client = create_stage_coord_client(
                     coord_zmq_addr=omni_coordinator_address,
                     input_addr=addresses.inputs[0],
                     output_addr=addresses.outputs[0],
                     stage_id=int(omni_stage_id),
+                    queue_length_getter=scheduler.get_num_unfinished_requests,
                 )
-
-                def _refresh_queue_length() -> None:
-                    """Pre-heartbeat hook: refresh queue_length from scheduler."""
-                    scheduler = getattr(engine_core, "scheduler", None)
-                    if scheduler is None:
-                        return
-                    try:
-                        coord_client._queue_length = int(  # type: ignore[union-attr]
-                            scheduler.get_num_unfinished_requests()
-                        )
-                    except Exception:
-                        # Live scheduler stats are best-effort — heartbeats
-                        # must not fail because of a stats lookup error.
-                        pass
-
-                coord_client._on_heartbeat = _refresh_queue_length
 
             def wakeup_engine() -> None:
                 engine_core.input_queue.put_nowait((EngineCoreRequestType.WAKEUP, None))
@@ -184,109 +288,3 @@ class StageEngineCoreProc(EngineCoreProc):
                     coord_client.close()
             if engine_core is not None:
                 engine_core.shutdown()
-
-
-def spawn_stage_core(
-    vllm_config: VllmConfig,
-    executor_class: type[Executor],
-    log_stats: bool = False,
-) -> tuple[EngineZmqAddresses, BaseProcess, str]:
-    """Spawn a *StageEngineCoreProc* subprocess without performing the handshake.
-
-    Must be called while the correct device env vars are set (e.g. under
-    the stage-launch lock).  Call ``complete_stage_handshake`` afterwards.
-
-    Returns ``(addresses, process, handshake_address)``.
-    """
-    addresses = get_engine_zmq_addresses(vllm_config)
-    handshake_address = get_open_zmq_ipc_path()
-
-    ctx = get_mp_context()
-    proc = ctx.Process(
-        target=StageEngineCoreProc.run_stage_core,
-        name="StageEngineCoreProc",
-        kwargs={
-            "vllm_config": vllm_config,
-            "local_client": True,
-            "handshake_address": handshake_address,
-            "executor_class": executor_class,
-            "log_stats": log_stats,
-            "dp_rank": 0,
-            "local_dp_rank": 0,
-        },
-    )
-    proc.start()
-    return addresses, proc, handshake_address
-
-
-def complete_stage_handshake(
-    proc: BaseProcess,
-    handshake_address: str,
-    addresses: EngineZmqAddresses,
-    vllm_config: VllmConfig,
-    handshake_timeout: int,
-) -> None:
-    """Perform the HELLO/INIT/READY handshake with an already-spawned proc.
-
-    On failure the process is terminated before re-raising.
-    """
-    try:
-        _perform_handshake(proc, handshake_address, addresses, vllm_config, handshake_timeout)
-    except Exception:
-        shutdown([proc])
-        raise
-
-
-def _perform_handshake(
-    proc: BaseProcess,
-    handshake_address: str,
-    addresses: EngineZmqAddresses,
-    vllm_config: VllmConfig,
-    handshake_timeout: int,
-) -> None:
-    """Run the HELLO / INIT / READY handshake with the subprocess."""
-    with zmq_socket_ctx(handshake_address, zmq.ROUTER, bind=True) as handshake_socket:
-        poller = zmq.Poller()
-        poller.register(handshake_socket, zmq.POLLIN)
-        poller.register(proc.sentinel, zmq.POLLIN)
-
-        identity, msg = _recv(poller, handshake_socket, proc, "HELLO", handshake_timeout)
-        if msg.get("status") != "HELLO":
-            raise RuntimeError(f"Expected HELLO, got: {msg}")
-
-        init_payload = EngineHandshakeMetadata(
-            addresses=addresses,
-            parallel_config={},
-        )
-        handshake_socket.send_multipart([identity, msgspec.msgpack.encode(init_payload)])
-
-        identity, msg = _recv(poller, handshake_socket, proc, "READY", handshake_timeout)
-        if msg.get("status") != "READY":
-            raise RuntimeError(f"Expected READY, got: {msg}")
-        num_gpu_blocks = msg.get("num_gpu_blocks")
-        if num_gpu_blocks is not None:
-            vllm_config.cache_config.num_gpu_blocks = num_gpu_blocks
-
-
-def _recv(
-    poller: zmq.Poller,
-    handshake_socket: zmq.Socket,
-    proc: BaseProcess,
-    expected: str,
-    timeout_s: int = 600,
-) -> tuple[bytes, dict]:
-    """Wait for one handshake message; raise if the process dies first."""
-    timeout_ms = timeout_s * 1000
-    while True:
-        events = dict(poller.poll(timeout=timeout_ms))
-        if not events:
-            raise TimeoutError(
-                f"Timed out waiting for {expected} from StageEngineCoreProc after {timeout_s}s. "
-                f"This typically indicates model loading or initialization is taking too long. "
-                f"Consider increasing `stage_init_timeout` for large models."
-            )
-        if handshake_socket in events:
-            identity, raw = handshake_socket.recv_multipart()
-            return identity, msgspec.msgpack.decode(raw)
-        if proc.exitcode is not None:
-            raise RuntimeError(f"StageEngineCoreProc died during {expected} (exit code {proc.exitcode})")

@@ -12,10 +12,10 @@ pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 _MODEL = "test-model"
 
 _PIPELINE_METRICS = [
-    "vllm:omni_num_requests_running",
-    "vllm:omni_num_requests_waiting",
-    "vllm:omni_requests_success",
-    "vllm:omni_e2e_request_latency_s",
+    "vllm_omni:num_requests_running",
+    "vllm_omni:num_requests_waiting",
+    "vllm_omni:requests_success",
+    "vllm_omni:e2e_request_latency_s",
 ]
 
 
@@ -58,32 +58,32 @@ class TestMetricObservation:
         # Per-reason buckets sourced from the merged completion Counter.
         stop = _sample_value(
             scrape_output,
-            f'vllm:omni_requests_success_total{{finished_reason="stop",model_name="{_MODEL}"}}',
+            f'vllm_omni:requests_success_total{{finished_reason="stop",model_name="{_MODEL}"}}',
         )
         assert stop == 2.0
 
         length = _sample_value(
             scrape_output,
-            f'vllm:omni_requests_success_total{{finished_reason="length",model_name="{_MODEL}"}}',
+            f'vllm_omni:requests_success_total{{finished_reason="length",model_name="{_MODEL}"}}',
         )
         assert length == 1.0
 
         abort = _sample_value(
             scrape_output,
-            f'vllm:omni_requests_success_total{{finished_reason="abort",model_name="{_MODEL}"}}',
+            f'vllm_omni:requests_success_total{{finished_reason="abort",model_name="{_MODEL}"}}',
         )
         assert abort == 1.0
 
     def test_gauge_values(self, scrape_output: str) -> None:
         running = _sample_value(
             scrape_output,
-            f'vllm:omni_num_requests_running{{model_name="{_MODEL}"}}',
+            f'vllm_omni:num_requests_running{{model_name="{_MODEL}"}}',
         )
         assert running == 5.0
 
         waiting = _sample_value(
             scrape_output,
-            f'vllm:omni_num_requests_waiting{{model_name="{_MODEL}"}}',
+            f'vllm_omni:num_requests_waiting{{model_name="{_MODEL}"}}',
         )
         assert waiting == 2.0
 
@@ -93,7 +93,7 @@ class TestMetricObservation:
         # observing the latency histogram, so the count stays at 3.
         e2e_count = _sample_value(
             scrape_output,
-            f'vllm:omni_e2e_request_latency_s_count{{model_name="{_MODEL}"}}',
+            f'vllm_omni:e2e_request_latency_s_count{{model_name="{_MODEL}"}}',
         )
         assert e2e_count == 3.0
 
@@ -110,8 +110,8 @@ class TestLabelCorrectness:
     def test_no_legacy_seconds_or_ms_families(self, scrape_output: str) -> None:
         # Renamed: *_time_ms → *_s; *_time_seconds dropped.
         for legacy in (
-            "vllm:omni_request_queue_time_seconds",
-            "vllm:omni_e2e_request_latency_seconds",
+            "vllm_omni:request_queue_time_seconds",
+            "vllm_omni:e2e_request_latency_seconds",
         ):
             assert legacy not in scrape_output, f"legacy family {legacy} still registered"
 
@@ -154,7 +154,6 @@ class TestRequestLifecycleGauges:
         obj.engine = SimpleNamespace(_running_counter=OmniRequestCounter())
         obj.prom_metrics = OmniPrometheusMetrics(model_name="lifecycle-test")
         obj.request_states = {}
-        obj._consumed_metric_messages = {}
         obj.log_stats = False
 
         # Simulate request lifecycle: start (counter 0→1, dict {} → {req}),
@@ -170,8 +169,8 @@ class TestRequestLifecycleGauges:
         assert obj.engine._running_counter.value == 0
         assert len(obj.request_states) == 0
         out = generate_latest(registry).decode()
-        assert _sample_value(out, 'vllm:omni_num_requests_running{model_name="lifecycle-test"}') == 0.0
-        assert _sample_value(out, 'vllm:omni_num_requests_waiting{model_name="lifecycle-test"}') == 0.0
+        assert _sample_value(out, 'vllm_omni:num_requests_running{model_name="lifecycle-test"}') == 0.0
+        assert _sample_value(out, 'vllm_omni:num_requests_waiting{model_name="lifecycle-test"}') == 0.0
 
     def test_gauges_reflect_remaining_requests_after_one_completes(self, registry: CollectorRegistry) -> None:
         from types import SimpleNamespace
@@ -183,7 +182,6 @@ class TestRequestLifecycleGauges:
         obj.engine = SimpleNamespace(_running_counter=OmniRequestCounter())
         obj.prom_metrics = OmniPrometheusMetrics(model_name="lifecycle-test-2")
         obj.request_states = {}
-        obj._consumed_metric_messages = {}
         obj.log_stats = False
 
         # Two in flight, one finalizes — running should report 1, waiting 0.
@@ -196,5 +194,34 @@ class TestRequestLifecycleGauges:
         obj._log_summary_and_cleanup("req-1")
 
         out = generate_latest(registry).decode()
-        assert _sample_value(out, 'vllm:omni_num_requests_running{model_name="lifecycle-test-2"}') == 1.0
-        assert _sample_value(out, 'vllm:omni_num_requests_waiting{model_name="lifecycle-test-2"}') == 0.0
+        assert _sample_value(out, 'vllm_omni:num_requests_running{model_name="lifecycle-test-2"}') == 1.0
+        assert _sample_value(out, 'vllm_omni:num_requests_waiting{model_name="lifecycle-test-2"}') == 0.0
+
+    def test_engine_queued_requests_count_as_waiting(self, registry: CollectorRegistry) -> None:
+        from types import SimpleNamespace
+
+        from vllm_omni.entrypoints.omni_base import OmniBase
+        from vllm_omni.metrics.prometheus import OmniPrometheusMetrics, OmniRequestCounter
+
+        obj = object.__new__(OmniBase)
+        obj.engine = SimpleNamespace(
+            _running_counter=OmniRequestCounter(),
+            _engines_waiting_counter=OmniRequestCounter(),
+        )
+        obj.prom_metrics = OmniPrometheusMetrics(model_name="lifecycle-test-3")
+        obj.request_states = {}
+        obj.log_stats = False
+
+        # Three requests dispatched to a stage engine whose scheduler admits
+        # one and queues two (e.g. a diffusion engine with
+        # max_num_running_reqs=1). The orchestrator reports the queued count
+        # via _engines_waiting_counter; they must show as waiting, not running.
+        for _ in range(3):
+            obj.engine._running_counter.increment()
+        obj.engine._engines_waiting_counter.value = 2
+
+        obj._publish_request_gauges(3)
+
+        out = generate_latest(registry).decode()
+        assert _sample_value(out, 'vllm_omni:num_requests_running{model_name="lifecycle-test-3"}') == 1.0
+        assert _sample_value(out, 'vllm_omni:num_requests_waiting{model_name="lifecycle-test-3"}') == 2.0

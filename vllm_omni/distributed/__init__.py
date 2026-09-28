@@ -6,6 +6,8 @@ from .omni_connectors import (
     MooncakeConnector,
     MooncakeStoreConnector,
     MooncakeTransferEngineConnector,
+    MoriTransferEngineConnector,
+    NixlConnector,
     OmniConnectorBase,
     OmniConnectorFactory,
     OmniTransferConfig,
@@ -25,6 +27,8 @@ __all__ = [
     "MooncakeConnector",  # compat alias
     "MooncakeStoreConnector",
     "MooncakeTransferEngineConnector",
+    "MoriTransferEngineConnector",
+    "NixlConnector",
     "SharedMemoryConnector",
     "YuanrongConnector",
     "YuanrongTransferEngineConnector",

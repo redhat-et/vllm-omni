@@ -2,6 +2,9 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Unit tests for LayerNorm and RMSNorm custom ops in diffusion layers."""
 
+import sys
+import types
+
 import pytest
 import torch
 from pytest_mock import MockerFixture
@@ -299,6 +302,135 @@ def test_rmsnorm_numerical_correctness():
     torch.testing.assert_close(out, expected, atol=1e-5, rtol=1e-5)
 
 
+def test_rmsnorm_dtype_matches_parameter_and_fp32_accumulation_contract():
+    """dtype controls gamma storage; reduced-precision inputs still use fp32 accumulation."""
+    from vllm_omni.diffusion.layers.norm import RMSNorm
+
+    hidden_size = 64
+    eps = 1e-6
+    norm = RMSNorm(hidden_size, eps=eps, dtype=torch.bfloat16)
+    x = torch.randn(2, 4, hidden_size, dtype=torch.bfloat16)
+
+    assert norm.weight.dtype == torch.bfloat16
+
+    x_fp32 = x.float()
+    expected = (x_fp32 * torch.rsqrt(x_fp32.square().mean(-1, keepdim=True) + eps) * norm.weight.float()).to(x.dtype)
+
+    torch.testing.assert_close(norm.forward_native(x), expected, atol=0, rtol=0)
+
+
+def test_rmsnorm_npu_receives_gamma_with_configured_dtype(monkeypatch: pytest.MonkeyPatch):
+    """The NPU fused op receives the bf16 checkpoint gamma used by H3."""
+    from vllm_omni.diffusion.layers.norm import RMSNorm
+
+    captured: dict[str, torch.Tensor] = {}
+
+    def npu_rms_norm(x: torch.Tensor, gamma: torch.Tensor, epsilon: float):
+        captured["gamma"] = gamma
+        captured["epsilon"] = torch.tensor(epsilon)
+        return (x,)
+
+    monkeypatch.setitem(sys.modules, "torch_npu", types.SimpleNamespace(npu_rms_norm=npu_rms_norm))
+    norm = RMSNorm(64, eps=1e-5, dtype=torch.bfloat16)
+    x = torch.randn(2, 4, 64, dtype=torch.bfloat16)
+
+    assert norm.forward_npu(x) is x
+    assert captured["gamma"] is norm.weight
+    assert captured["gamma"].dtype == torch.bfloat16
+    assert captured["epsilon"].item() == pytest.approx(1e-5)
+
+
+# ── RMSNorm residual tests ──
+
+
+def test_rmsnorm_matches_native_residual_contract():
+    """The non-NPU path preserves separate residual-add and RMSNorm math."""
+    from vllm_omni.diffusion.layers.norm import RMSNorm
+
+    eps = 1e-6
+    norm = RMSNorm(4, eps=eps, dtype=torch.bfloat16)
+    norm.weight.data.copy_(torch.tensor([1.0, 0.5, 1.5, 2.0], dtype=torch.bfloat16))
+    x = torch.tensor([[1.0, -2.0, 3.0, -4.0]], dtype=torch.bfloat16)
+    residual = torch.tensor([[0.00390625, 0.0078125, -0.0078125, 0.015625]], dtype=torch.bfloat16)
+
+    expected_residual = residual + x
+    expected_fp32 = expected_residual.float()
+    expected_output = expected_fp32 * torch.rsqrt(expected_fp32.square().mean(-1, keepdim=True) + eps)
+    expected_output = (expected_output * norm.weight.float()).to(x.dtype)
+    output, updated_residual = norm.forward_native(x, residual)
+
+    torch.testing.assert_close(updated_residual, expected_residual, atol=0, rtol=0)
+    torch.testing.assert_close(output, expected_output, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize(
+    "forward_name",
+    ["forward_cuda", "forward_hip", "forward_musa", "forward_xpu"],
+)
+def test_rmsnorm_non_npu_residual_delegates_to_native(
+    monkeypatch: pytest.MonkeyPatch,
+    forward_name: str,
+):
+    """Platform wrappers keep residual arithmetic in forward_native."""
+    from vllm_omni.diffusion.layers.norm import RMSNorm
+
+    norm = RMSNorm(4, eps=1e-5, dtype=torch.bfloat16)
+    x = torch.randn(2, 4, dtype=torch.bfloat16)
+    residual = torch.randn_like(x)
+    expected_output = torch.randn_like(x)
+    expected_residual = torch.randn_like(x)
+    captured: dict[str, object] = {}
+
+    def forward_native(native_x: torch.Tensor, native_residual: torch.Tensor | None = None):
+        captured.update(x=native_x, residual=native_residual)
+        return expected_output, expected_residual
+
+    monkeypatch.setattr(norm, "forward_native", forward_native)
+
+    output, updated_residual = getattr(norm, forward_name)(x, residual)
+
+    assert output is expected_output
+    assert updated_residual is expected_residual
+    assert captured["x"] is x
+    assert captured["residual"] is residual
+
+
+def test_rmsnorm_npu_residual_uses_torch_npu_fused_op(monkeypatch: pytest.MonkeyPatch):
+    """NPU keeps the direct fused AddRMSNorm path instead of IR fallback."""
+    from vllm_omni.diffusion.layers.norm import RMSNorm
+
+    captured: dict[str, object] = {}
+    fused_output = torch.randn(2, 4, dtype=torch.bfloat16)
+    fused_residual = torch.randn(2, 4, dtype=torch.bfloat16)
+
+    def npu_add_rms_norm(
+        x: torch.Tensor,
+        residual: torch.Tensor,
+        gamma: torch.Tensor,
+        epsilon: float,
+    ):
+        captured.update(x=x, residual=residual, gamma=gamma, epsilon=epsilon)
+        return fused_output, torch.empty(0), fused_residual
+
+    monkeypatch.setitem(
+        sys.modules,
+        "torch_npu",
+        types.SimpleNamespace(npu_add_rms_norm=npu_add_rms_norm),
+    )
+    norm = RMSNorm(4, eps=1e-5, dtype=torch.bfloat16)
+    x = torch.randn(2, 4, dtype=torch.bfloat16)
+    residual = torch.randn(2, 4, dtype=torch.bfloat16)
+
+    output, updated_residual = norm.forward_npu(x, residual)
+
+    assert output is fused_output
+    assert updated_residual is fused_residual
+    assert captured["x"] is x
+    assert captured["residual"] is residual
+    assert captured["gamma"] is norm.weight
+    assert captured["epsilon"] == 1e-5
+
+
 # ── RMSNorm compile-path regression tests ──
 
 
@@ -578,11 +710,26 @@ def test_rmsnorm_fused_native_parity_2d_input():
 
 
 def test_rmsnorm_fused_native_parity_custom_weight():
-    """Verify fused and native RMSNorm parity with non-default weights."""
+    """Verify fused and native RMSNorm parity with non-default weights.
+
+    Note: bfloat16 requires wider tolerance because the fused CUDA kernel
+    (vllm._custom_ops.rms_norm) computes in bf16 precision internally,
+    while forward_native uses float32 intermediates. With random custom
+    weights (not the default ones-weight), this precision gap exceeds 1e-3.
+
+    The gap surfaced after upstream vLLM routed RMSNorm through the vLLM IR
+    op (ir.ops.rms_norm) — see upstream commit 40bb17502
+    "[vLLM IR] 1/N Implement IR skeleton and rms_norm op (#33825)" — which
+    changed which fused kernel/precision path the layer dispatches to.
+    """
     from vllm_omni.diffusion.layers.norm import RMSNorm
 
     hidden_size = 64
     eps = 1e-6
+
+    # Per-dtype tolerances: bf16 fused kernel has inherent precision limit
+    atol_map = {torch.float32: 1e-3, torch.float16: 1e-3, torch.bfloat16: 2e-2}
+    rtol_map = {torch.float32: 1e-3, torch.float16: 1e-3, torch.bfloat16: 1e-2}
 
     for dtype in [torch.float32, torch.float16, torch.bfloat16]:
         torch.manual_seed(789)
@@ -594,4 +741,4 @@ def test_rmsnorm_fused_native_parity_custom_weight():
         out_fused = norm._forward_fused(x)
         out_native = norm.forward_native(x)
 
-        torch.testing.assert_close(out_fused, out_native, atol=1e-3, rtol=1e-3)
+        torch.testing.assert_close(out_fused, out_native, atol=atol_map[dtype], rtol=rtol_map[dtype])

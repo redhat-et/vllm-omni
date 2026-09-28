@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Unit tests for HunyuanImage3 AR sampler logic (stage transitions,
 ratio restriction, comprehension blocking)."""
 
@@ -20,6 +20,11 @@ RATIO_START = 200
 RATIO_END = 210
 RATIO_OTHER_START = 220
 RATIO_OTHER_END = 223
+TIMESTEP = 224
+CFG = 110
+IMG_TOK = 111
+JOINT_SEP = 112
+EOI = 113
 
 
 class FakeSamplerModel:
@@ -46,10 +51,13 @@ class FakeSamplerModel:
             self._stage_transitions[END_OF_THINK] = [RECAPTION]
             self._stage_transitions[END_OF_RECAPTION] = [ANSWER, BOI, SIZE_TOKEN]
 
-        self._blocked_token_ids: set[int] = set()
-        if is_comprehension:
-            self._blocked_token_ids.update([BOI, SIZE_TOKEN])
-            self._blocked_token_ids.update(self._all_ratio_ids)
+        # Mirrors the model: the blocklist is always built so generation-mode
+        # engines can apply it to per-request comprehension rows (#6088).
+        self._cfg_token_id = CFG
+        self._blocked_token_ids: set[int] = {BOI, EOI, SIZE_TOKEN, CFG, IMG_TOK, TIMESTEP, JOINT_SEP}
+        self._blocked_token_ids.update(self._all_ratio_ids)
+        self._blocked_token_ids_tensor = None
+        self._sampler = None
 
     # Bind the real methods from the model class.
     from vllm_omni.model_executor.models.hunyuan_image3.hunyuan_image3 import (
@@ -58,6 +66,69 @@ class FakeSamplerModel:
 
     _get_forced_token = _Real._get_forced_token
     _apply_ratio_restriction = _Real._apply_ratio_restriction
+    _row_is_comprehension = staticmethod(_Real._row_is_comprehension)
+    sample = _Real.sample
+
+
+class FakeTokenEmbedding:
+    def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
+        return torch.stack(
+            [
+                input_ids.to(dtype=torch.float32),
+                input_ids.to(dtype=torch.float32) + 0.5,
+            ],
+            dim=-1,
+        )
+
+
+class FakeEmbeddingModel:
+    def __init__(self):
+        self.model = FakeTokenEmbedding()
+        self._timestep_token_id = TIMESTEP
+
+    from vllm_omni.model_executor.models.hunyuan_image3.hunyuan_image3 import (
+        HunyuanImage3ForConditionalGeneration as _Real,
+    )
+
+    embed_input_ids = _Real.embed_input_ids
+
+    def _timestep_encode(self, timestep: torch.Tensor) -> torch.Tensor:
+        return torch.full(
+            (1, 2),
+            -7.0,
+            device=timestep.device,
+            dtype=timestep.dtype,
+        )
+
+
+class TestTimestepEmbedding:
+    def test_timestep_embedding_avoids_scalar_item_sync(self, monkeypatch):
+        model = FakeEmbeddingModel()
+        input_ids = torch.tensor([1, TIMESTEP, 2, TIMESTEP], dtype=torch.long)
+
+        def fail_item(_self):
+            raise AssertionError("embed_input_ids should not synchronize timestep count")
+
+        monkeypatch.setattr(torch.Tensor, "item", fail_item)
+
+        actual = model.embed_input_ids(input_ids)
+        expected = model.model.embed_input_ids(input_ids)
+        expected[input_ids == TIMESTEP] = -7.0
+
+        torch.testing.assert_close(actual, expected)
+
+    def test_timestep_embedding_preserves_no_timestep_inputs(self, monkeypatch):
+        model = FakeEmbeddingModel()
+        input_ids = torch.tensor([1, 2, 3], dtype=torch.long)
+
+        def fail_item(_self):
+            raise AssertionError("embed_input_ids should not synchronize timestep count")
+
+        monkeypatch.setattr(torch.Tensor, "item", fail_item)
+
+        actual = model.embed_input_ids(input_ids)
+
+        torch.testing.assert_close(actual, model.model.embed_input_ids(input_ids))
 
 
 class TestGetForcedToken:
@@ -188,3 +259,114 @@ class TestForceEosAfterRatio:
         assert logits[0, EOS].item() == 0
         non_eos_max = logits[0, :EOS].max().item()
         assert non_eos_max == min_score
+
+
+class _RecordingSampler:
+    """Stub sampler: returns the (mutated) logits so tests can assert on them."""
+
+    def __call__(self, *, logits, sampling_metadata):
+        return logits
+
+
+def _metadata(output_token_ids):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(output_token_ids=output_token_ids)
+
+
+class TestPerRequestTaskMode:
+    """Generation-mode engines must honor per-request comprehension rows (#6088).
+
+    A text chat (I2T/T2T) served by an AR+DiT deployment is marked with
+    extra_args={"ar_task_mode": "comprehension"}; its rows get the stateless
+    image-token blocking instead of stage-transition forcing, while untagged
+    rows keep the generation behavior.
+    """
+
+    VOCAB = 300
+
+    def _run(self, model, histories, per_req_extra_args):
+        logits = torch.zeros(len(histories), self.VOCAB)
+        logits[:, 50] = 7.0  # ordinary text token, must survive comprehension
+        model._sampler = _RecordingSampler()
+        out = model.sample(logits, _metadata(histories), per_req_extra_args=per_req_extra_args)
+        return out
+
+    def test_comprehension_row_skips_forcing_and_blocks_image_tokens(self):
+        model = FakeSamplerModel(is_comprehension=False)
+        min_score = torch.finfo(torch.float32).min
+
+        logits = self._run(
+            model,
+            histories=[[END_OF_THINK], [END_OF_THINK]],
+            per_req_extra_args=[{"ar_task_mode": "comprehension"}, None],
+        )
+
+        # Row 0 (comprehension): no </think> -> <recaption> forcing (ordinary
+        # text token survives, which a force-fill would have erased) and every
+        # DiT scaffold token is masked.
+        assert logits[0, 50].item() == 7.0
+        for tid in (BOI, EOI, SIZE_TOKEN, CFG, IMG_TOK, TIMESTEP, JOINT_SEP, RATIO_START, RATIO_OTHER_START):
+            assert logits[0, tid].item() == min_score, f"token {tid} not blocked"
+
+        # Row 1 (generation): forced to <recaption> exactly as before.
+        assert logits[1, RECAPTION].item() == 0
+        assert logits[1, 50].item() == min_score
+
+    def test_no_extra_args_keeps_generation_behavior(self):
+        model = FakeSamplerModel(is_comprehension=False)
+        min_score = torch.finfo(torch.float32).min
+
+        logits = self._run(model, histories=[[END_OF_THINK]], per_req_extra_args=None)
+
+        assert logits[0, RECAPTION].item() == 0
+        assert logits[0, 50].item() == min_score
+
+    def test_empty_or_foreign_extra_args_keeps_generation_behavior(self):
+        model = FakeSamplerModel(is_comprehension=False)
+
+        logits = self._run(
+            model,
+            histories=[[END_OF_THINK], [END_OF_THINK]],
+            per_req_extra_args=[{}, {"other_key": 1}],
+        )
+
+        assert logits[0, RECAPTION].item() == 0
+        assert logits[1, RECAPTION].item() == 0
+
+    def test_comprehension_row_without_trigger_history(self):
+        model = FakeSamplerModel(is_comprehension=False)
+        min_score = torch.finfo(torch.float32).min
+
+        logits = self._run(
+            model,
+            histories=[[1, 2, 3]],
+            per_req_extra_args=[{"ar_task_mode": "comprehension"}],
+        )
+
+        assert logits[0, 50].item() == 7.0
+        assert logits[0, CFG].item() == min_score
+
+    def test_static_comprehension_engine_blocks_cfg(self):
+        model = FakeSamplerModel(is_comprehension=True)
+        min_score = torch.finfo(torch.float32).min
+
+        logits = self._run(model, histories=[[1, 2]], per_req_extra_args=None)
+
+        for tid in (BOI, EOI, SIZE_TOKEN, CFG, IMG_TOK, TIMESTEP, JOINT_SEP):
+            assert logits[0, tid].item() == min_score
+        assert logits[0, 50].item() == 7.0
+
+    def test_extra_args_shorter_than_batch_defaults_to_generation(self):
+        model = FakeSamplerModel(is_comprehension=False)
+
+        logits = self._run(
+            model,
+            histories=[[END_OF_THINK], [END_OF_THINK]],
+            per_req_extra_args=[{"ar_task_mode": "comprehension"}],
+        )
+        min_score = torch.finfo(torch.float32).min
+
+        assert logits[0, 50].item() == 7.0  # tagged row: comprehension
+        assert logits[1, RECAPTION].item() == 0  # missing entry: generation
+        assert logits[1, 50].item() == min_score

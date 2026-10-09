@@ -36,7 +36,7 @@ def get_system_prompt():
                 "text": (
                     "You are Qwen, a virtual human developed by the Qwen Team, "
                     "Alibaba Group, capable of perceiving text, image, audio or video inputs, "
-                    "as well as generating text and speech."
+                    "as well as generating text."
                 ),
             }
         ],

@@ -568,7 +568,6 @@ class StageMetadata:
     engine_input_source: list[int]
     final_output: bool
     final_output_type: str | None
-    supported_output_types: list[str] | None = None
     default_sampling_params: OmniSamplingParams
     custom_process_input_func: Callable | None
     model_stage: str | None
@@ -577,6 +576,7 @@ class StageMetadata:
     prompt_expand_func: Callable | None = None
     cfg_kv_collect_func: Callable | None = None
     async_chunk_prewarm_payload_func: Callable | None = None
+    supported_output_types: list[str] | None = None
     # Multi-replica: replica_id distinguishes replicas of the same stage.
     # For single-replica stages this defaults to 0.
     replica_id: int = 0

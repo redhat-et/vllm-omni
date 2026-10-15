@@ -568,6 +568,7 @@ class StageMetadata:
     engine_input_source: list[int]
     final_output: bool
     final_output_type: str | None
+    supported_output_types: list[str] | None = None
     default_sampling_params: OmniSamplingParams
     custom_process_input_func: Callable | None
     model_stage: str | None
@@ -621,6 +622,7 @@ def extract_legacy_stage_metadata(stage_config: Any) -> StageMetadata:
     engine_input_source: list[int] = _get_attr_or_item(stage_config, "engine_input_source", [])
     final_output: bool = stage_config.final_output
     final_output_type: str | None = stage_config.final_output_type
+    supported_output_types: tuple[str, ...] | None = stage_config.supported_output_types
 
     default_sp = _to_dict(_get_attr_or_item(stage_config, "default_sampling_params", {}))
     # A pooling stage carries its task via default_pooling_params, set where the
@@ -679,6 +681,7 @@ def extract_legacy_stage_metadata(stage_config: Any) -> StageMetadata:
             engine_input_source=engine_input_source,
             final_output=final_output,
             final_output_type=final_output_type,
+            supported_output_types=supported_output_types,
             default_sampling_params=default_params,
             custom_process_input_func=custom_process_input_func,
             model_stage=model_stage,
@@ -700,6 +703,7 @@ def extract_legacy_stage_metadata(stage_config: Any) -> StageMetadata:
         engine_input_source=engine_input_source,
         final_output=final_output,
         final_output_type=final_output_type,
+        supported_output_types=supported_output_types,
         default_sampling_params=default_params,
         custom_process_input_func=custom_process_input_func,
         model_stage=model_stage,

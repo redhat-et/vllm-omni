@@ -82,6 +82,10 @@ logger = init_logger(__name__)
 class StageRuntimeInfo:
     final_output: bool
     final_output_type: FinalOutputModalityType | None
+    # Explicit list of all output types this stage supports (e.g., ("image", "video")).
+    # For multi-modality pipelines like Cosmos3, this allows advertising both x2i and x2v
+    # even though final_output_type is "video".
+    supported_output_types: list[str] | None = None
     stage_type: str
     model_stage: str | None = None
 

@@ -346,6 +346,7 @@ class StagePipelineConfig:
     input_sources: tuple[int, ...] = ()
     final_output: bool = False
     final_output_type: str | None = None
+    supported_output_types: list[str] | None = None
     owns_tokenizer: bool = False
     requires_multimodal_data: bool = False
     hf_config_name: str | None = None

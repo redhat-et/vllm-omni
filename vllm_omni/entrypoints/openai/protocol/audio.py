@@ -1,21 +1,36 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+
 import math
-from typing import Annotated, Any, Literal
+from dataclasses import dataclass
+from typing import Annotated, Any, Literal, cast
 from urllib.parse import urlparse
 
 import numpy as np
-from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
 # Bound int request fields to avoid overflow issues.
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
 
 _MAX_EMBEDDING_DIM = 8192
+# Structural bounds for pre-computed reference codes ([codebooks, frames]);
+# the adapter checks the deployed model's exact codebook count and lengths.
+_MAX_REF_AUDIO_CODEBOOKS = 64
+_MAX_REF_AUDIO_CODE_FRAMES = 1 << 16
 
 SUPPORTED_AUDIO_FORMATS: frozenset[str] = frozenset({"wav", "pcm", "flac", "mp3", "opus"})
 SUPPORTED_CHAT_AUDIO_FORMATS: frozenset[str] = SUPPORTED_AUDIO_FORMATS | {"pcm16"}
-DEFAULT_AUDIO_FORMAT: str = "wav"
+DEFAULT_AUDIO_FORMAT: Literal["wav", "pcm", "flac", "mp3", "opus"] = "wav"
 SpeechSampleRate = Annotated[int, Field(gt=0)]
 
 
@@ -56,7 +71,19 @@ def _normalize_speaker_embedding_value(value):
     return [float(x) for x in value]
 
 
+@dataclass(frozen=True)
+class RegisteredVoiceReference:
+    """Server-only snapshot of an uploaded audio generation."""
+
+    name: str
+    created_at: int
+    file_path: str
+    ref_text: str | None
+
+
 class OpenAICreateSpeechRequest(BaseModel):
+    _registered_voice_reference: RegisteredVoiceReference | None = PrivateAttr(default=None)
+
     input: str
     model: str | None = None
     # Accept both "voice" (OpenAI convention) and "speaker" (model/internal
@@ -152,6 +179,15 @@ class OpenAICreateSpeechRequest(BaseModel):
         "2048-dim for 1.7B). Skips speaker encoder extraction from ref_audio. "
         "Implies x_vector_only_mode=True. Mutually exclusive with ref_audio.",
     )
+    ref_audio_codes: list[list[StrictInt]] | None = Field(
+        default=None,
+        description=(
+            "Pre-computed codec codes of the reference audio, shaped [codebooks, frames]: the raw "
+            "codebook indices from the deployed model's own codec. Skips reference encoding. "
+            "Requires ref_text; mutually exclusive with ref_audio, speaker_embedding and an "
+            "uploaded voice. Supported by Fish Audio Drama 3."
+        ),
+    )
     max_new_tokens: int | None = Field(
         default=None,
         ge=1,
@@ -202,15 +238,31 @@ class OpenAICreateSpeechRequest(BaseModel):
             raise ValueError("Invalid voice: voice cannot be empty or whitespace")
         return v
 
-    @field_validator("stream_format")
-    @classmethod
-    def validate_stream_format(cls, v: str) -> str:
-        return v
-
     @field_validator("ref_audio", mode="before")
     @classmethod
     def normalize_ref_audio(cls, v):
         return _normalize_ref_audio_value(v)
+
+    @field_validator("ref_audio_codes")
+    @classmethod
+    def validate_ref_audio_codes(cls, v: list[list[int]] | None) -> list[list[int]] | None:
+        """A non-empty rectangular grid; the adapter checks its values against the model's
+        codec (each codebook's size) before anything converts them."""
+        if v is None:
+            return None
+        if not v or not v[0]:
+            raise ValueError("'ref_audio_codes' must be a non-empty [codebooks, frames] array")
+        if len(v) > _MAX_REF_AUDIO_CODEBOOKS:
+            raise ValueError(
+                f"'ref_audio_codes' has {len(v)} rows; it is shaped [codebooks, frames] "
+                f"(at most {_MAX_REF_AUDIO_CODEBOOKS} codebooks)"
+            )
+        frames = len(v[0])
+        if any(len(row) != frames for row in v):
+            raise ValueError("'ref_audio_codes' rows (codebooks) must all have the same number of frames")
+        if frames > _MAX_REF_AUDIO_CODE_FRAMES:
+            raise ValueError(f"'ref_audio_codes' has {frames} frames; at most {_MAX_REF_AUDIO_CODE_FRAMES}")
+        return v
 
     @field_validator("speaker_embedding")
     @classmethod
@@ -223,15 +275,17 @@ class OpenAICreateSpeechRequest(BaseModel):
         if not v:
             return []
         if isinstance(v[0], list):
-            for item in v:
+            nested = cast(list[list[float]], v)
+            for item in nested:
                 if not item:
                     raise ValueError("'speaker_embedding' nested vectors must be non-empty")
                 if not all(math.isfinite(x) for x in item):
                     raise ValueError("'speaker_embedding' values must be finite (no NaN or Inf)")
-            return v
-        if not all(math.isfinite(x) for x in v):
+            return nested
+        flat = cast(list[float], v)
+        if not all(math.isfinite(x) for x in flat):
             raise ValueError("'speaker_embedding' values must be finite (no NaN or Inf)")
-        return v
+        return flat
 
     @model_validator(mode="before")
     @classmethod
@@ -330,6 +384,13 @@ class OpenAICreateSpeechRequest(BaseModel):
         if self.speaker_embedding is not None:
             if self.ref_audio is not None and not isinstance(self.ref_audio, list):
                 raise ValueError("'speaker_embedding' and 'ref_audio' are mutually exclusive")
+        if self.ref_audio_codes is not None:
+            if self.ref_audio is not None:
+                raise ValueError("'ref_audio_codes' and 'ref_audio' are mutually exclusive")
+            if self.speaker_embedding is not None:
+                raise ValueError("'ref_audio_codes' and 'speaker_embedding' are mutually exclusive")
+            if not self.ref_text or not self.ref_text.strip():
+                raise ValueError("'ref_audio_codes' requires 'ref_text' (transcript of the reference audio)")
         return self
 
     def is_raw_audio_stream(self) -> bool:
@@ -386,6 +447,16 @@ class OpenAICreateAudioGenerateRequest(BaseModel):
         default=0.0,
         description="Audio start time in seconds",
     )
+    num_frames: int | None = Field(
+        default=None,
+        ge=1,
+        description="Exact generation frame count for pipelines that support frame-based duration",
+    )
+    frame_rate: float | None = Field(
+        default=None,
+        gt=0,
+        description="Frame rate used with num_frames by pipelines that support frame-based duration",
+    )
     negative_prompt: str | None = Field(
         default=None,
         description="Negative prompt for classifier-free guidance",
@@ -401,6 +472,10 @@ class OpenAICreateAudioGenerateRequest(BaseModel):
         ge=1,
         le=1000,
         description="Number of inference steps",
+    )
+    extra_params: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional model-specific generation parameters",
     )
     seed: int | None = Field(
         default=None,
@@ -418,15 +493,14 @@ class OpenAICreateAudioGenerateRequest(BaseModel):
 
 
 class CreateAudio(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     audio_tensor: np.ndarray
     sample_rate: int = 24000
     output_sample_rate: int | None = None
     response_format: str = "wav"
     speed: float = 1.0
     base64_encode: bool = True
-
-    class Config:
-        arbitrary_types_allowed = True
 
 
 class AudioChunkMetadata(BaseModel):
@@ -451,10 +525,6 @@ class AudioResponse(BaseModel):
 # --- Batch Speech Models ---
 
 
-_SPEECH_MAX_INSTRUCTIONS_LENGTH = 500
-_SPEECH_MAX_NEW_TOKENS_MIN = 1
-_SPEECH_MAX_NEW_TOKENS_MAX = 4096
-
 _SPEECH_REF_AUDIO_VALID_SCHEMES = frozenset({"http", "https", "data", "file"})
 _REF_AUDIO_FORMAT_ERROR = "ref_audio must be a URL (http/https), base64 data URL (data:...), or file URI (file://...)"
 
@@ -465,22 +535,7 @@ def _validate_voice_not_empty(v: str | None) -> str | None:
     return v
 
 
-def _validate_instructions_length(v: str | None) -> str | None:
-    if v is not None and len(v) > _SPEECH_MAX_INSTRUCTIONS_LENGTH:
-        raise ValueError(f"Instructions too long (max {_SPEECH_MAX_INSTRUCTIONS_LENGTH} characters)")
-    return v
-
-
-def _validate_max_new_tokens_range(v: int | None) -> int | None:
-    if v is not None:
-        if v < _SPEECH_MAX_NEW_TOKENS_MIN:
-            raise ValueError(f"max_new_tokens must be at least {_SPEECH_MAX_NEW_TOKENS_MIN}")
-        if v > _SPEECH_MAX_NEW_TOKENS_MAX:
-            raise ValueError(f"max_new_tokens cannot exceed {_SPEECH_MAX_NEW_TOKENS_MAX}")
-    return v
-
-
-def _validate_ref_audio_format(ref_audio: str) -> str | None:
+def _validate_ref_audio_format(ref_audio: str | list[str] | None) -> str | None:
     """Validate a reference-audio URI and return an error message, if invalid."""
     if not isinstance(ref_audio, str):
         return _REF_AUDIO_FORMAT_ERROR
@@ -529,16 +584,6 @@ class SpeechBatchItem(BaseModel):
     def validate_voice(cls, v: str | None) -> str | None:
         return _validate_voice_not_empty(v)
 
-    @field_validator("instructions")
-    @classmethod
-    def validate_instructions(cls, v: str | None) -> str | None:
-        return _validate_instructions_length(v)
-
-    @field_validator("max_new_tokens")
-    @classmethod
-    def validate_max_new_tokens(cls, v: int | None) -> int | None:
-        return _validate_max_new_tokens_range(v)
-
     @field_validator("ref_audio")
     @classmethod
     def validate_ref_audio(cls, v: str | None) -> str | None:
@@ -569,16 +614,6 @@ class BatchSpeechRequest(BaseModel):
     @classmethod
     def validate_voice(cls, v: str | None) -> str | None:
         return _validate_voice_not_empty(v)
-
-    @field_validator("instructions")
-    @classmethod
-    def validate_instructions(cls, v: str | None) -> str | None:
-        return _validate_instructions_length(v)
-
-    @field_validator("max_new_tokens")
-    @classmethod
-    def validate_max_new_tokens(cls, v: int | None) -> int | None:
-        return _validate_max_new_tokens_range(v)
 
     @field_validator("ref_audio")
     @classmethod
@@ -659,6 +694,7 @@ class StreamingSpeechSessionConfig(BaseModel):
     """Configuration sent as the first WebSocket message for streaming TTS."""
 
     model: str | None = None
+    text_input_mode: Literal["buffered", "commitment"] = "buffered"
     voice: str | None = Field(default=None, validation_alias=AliasChoices("voice", "speaker"))
     task_type: Literal["CustomVoice", "VoiceDesign", "Base"] | None = None
     language: str | None = None

@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 """
 End-to-end tests for FLUX.2-dev text-to-image offline inference.
 
 FLUX.2-dev is a 32B parameter diffusion transformer that requires CPU offload
 on a single H100. Tests cover happy-path generation (dimensions, determinism,
-seed sensitivity, multi-output, CFG) and negative-path validation (invalid
-dimensions, empty prompt, bad inference steps).
+seed sensitivity, multi-output, CFG) and boundary validation (dimension
+resizing, empty prompt, bad inference steps).
 """
 
 import numpy as np
@@ -29,6 +29,7 @@ _OMNI_RUNNER_PARAM = (
 )
 
 pytestmark = [
+    pytest.mark.slow,
     pytest.mark.advanced_model,
     pytest.mark.diffusion,
     pytest.mark.parametrize("omni_runner", [_OMNI_RUNNER_PARAM], indirect=True),
@@ -61,8 +62,7 @@ def _send_text2img_request(
 
 
 def _images_from_response(response: DiffusionResponse) -> list:
-    if isinstance(response.images[0], list):
-        return [f for fr in response.images for f in fr]
+    assert response.images is not None
     return list(response.images)
 
 
@@ -127,12 +127,13 @@ def test_flux2_dev_text_to_image_with_cfg(omni_runner_handler: OmniRunnerHandler
         {
             "model": MODEL,
             "prompt": "A cinematic mountain landscape at sunrise",
+            "negative_prompt": "blurry, low quality",
             "sampling_params": OmniDiffusionSamplingParams(
                 height=_HEIGHT,
                 width=_WIDTH,
                 num_inference_steps=_NUM_INFERENCE_STEPS,
                 seed=42,
-                true_cfg_scale=4.0,
+                guidance_scale=4.0,
             ),
         }
     )
@@ -143,7 +144,7 @@ def test_flux2_dev_text_to_image_with_cfg(omni_runner_handler: OmniRunnerHandler
 
 
 @hardware_test(res={"cuda": "H100"})
-@pytest.mark.xfail(reason="Missing input validation: #3702")
+@pytest.mark.xfail(reason="Missing input validation: #3702", strict=True)
 def test_flux2_dev_rejects_empty_prompt(omni_runner_handler: OmniRunnerHandler):
     with pytest.raises((ValueError, RuntimeError)):
         omni_runner_handler.send_diffusion_request(
@@ -161,7 +162,7 @@ def test_flux2_dev_rejects_empty_prompt(omni_runner_handler: OmniRunnerHandler):
 
 
 @hardware_test(res={"cuda": "H100"})
-@pytest.mark.xfail(reason="Missing input validation: #3703")
+@pytest.mark.xfail(reason="Missing input validation: #3703", strict=True)
 def test_flux2_dev_rejects_zero_inference_steps(omni_runner_handler: OmniRunnerHandler):
     with pytest.raises((ValueError, RuntimeError)):
         omni_runner_handler.send_diffusion_request(
@@ -194,3 +195,5 @@ def test_flux2_dev_handles_non_divisible_dimensions(omni_runner_handler: OmniRun
     )
     images = _images_from_response(response)
     assert len(images) > 0, "Non-divisible dimensions should be handled gracefully"
+    for img in images:
+        assert_image_valid(img, width=512, height=512)

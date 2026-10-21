@@ -1021,12 +1021,6 @@ async def omni_init_app_state(
 
     state.vllm_config = vllm_config
 
-    # Get supported tasks
-    supported_tasks: set[str] = {"generate"}
-    if hasattr(engine_client, "get_supported_tasks"):
-        supported_tasks = set(await engine_client.get_supported_tasks())
-    logger.info("Supported tasks: %s", supported_tasks)
-
     resolved_chat_template = await _resolve_chat_template(engine_client, args)
 
     chat_template_config = ChatTemplateConfig(

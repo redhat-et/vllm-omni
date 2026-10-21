@@ -87,11 +87,15 @@ def _minimal_images_gen_json(omni_server: OmniServer) -> dict[str, object]:
         ),
         pytest.param({"layers": 1}, ("layers", "value_error", "2", "10"), id="layers_below_min"),
         pytest.param({"layers": 11}, ("layers", "value_error", "2", "10"), id="layers_above_max"),
-        pytest.param({"seed": -1}, ("seed", "greater_than_equal", "0"), id="seed_negative"),
         pytest.param(
-            {"seed": 2**32},
-            ("seed", "less_than_equal", "4294967295"),
-            id="seed_above_uint32",
+            {"seed": -(2**63) - 1},
+            ("seed", "greater_than_equal", str(-(2**63))),
+            id="seed_below_int64",
+        ),
+        pytest.param(
+            {"seed": 2**63},
+            ("seed", "less_than_equal", str(2**63 - 1)),
+            id="seed_above_int64",
         ),
         pytest.param(
             {"output_format": "gif"},

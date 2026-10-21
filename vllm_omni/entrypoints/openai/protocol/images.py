@@ -18,9 +18,13 @@ from typing import Any, Literal
 
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from vllm_omni.entrypoints.openai.image_api_utils import validate_layered_layers
+
+# Bound int request fields to avoid overflow issues.
+_INT64_MIN = -(2**63)
+_INT64_MAX = 2**63 - 1
 
 _FILE_RESPONSE_CHUNK_SIZE = 64 * 1024
 
@@ -55,6 +59,8 @@ class ImageGenerationRequest(BaseModel):
     for advanced diffusion parameters.
     """
 
+    model_config = ConfigDict(extra="allow")
+
     # Required fields
     prompt: str = Field(..., description="Text description of the desired image(s)")
     bot_task: str | None = Field(
@@ -82,7 +88,7 @@ class ImageGenerationRequest(BaseModel):
 
     @field_validator("prompt")
     @classmethod
-    def validate_prompt(cls, v):
+    def validate_prompt(cls, v: str) -> str:
         if not v or not v.strip():
             raise ValueError("prompt must be a non-empty string")
         return v
@@ -118,7 +124,7 @@ class ImageGenerationRequest(BaseModel):
 
     @field_validator("negative_prompt", "system_prompt")
     @classmethod
-    def validate_optional_string_fields(cls, v):
+    def validate_optional_string_fields(cls, v: str | None) -> str | None:
         if v is not None and not v.strip():
             raise ValueError("field must be a non-empty string or null")
         return v
@@ -168,7 +174,7 @@ class ImageGenerationRequest(BaseModel):
         default=None,
         description="Optional model-specific parameters passed directly to the model's extra_args.",
     )
-    seed: int | None = Field(default=None, ge=0, le=4294967295, description="Random seed for reproducibility")
+    seed: int | None = Field(default=None, ge=_INT64_MIN, le=_INT64_MAX, description="Random seed for reproducibility")
     generator_device: str | None = Field(
         default=None,
         description="Device for the seeded torch.Generator (e.g. 'cpu', 'cuda'). Defaults to the runner's device.",
@@ -193,7 +199,7 @@ class ImageGenerationRequest(BaseModel):
     # Output format for generated images
     output_format: str | None = Field(
         default=None,
-        description="Output image format: 'png', 'jpeg', or 'webp'. Defaults to 'png'.",
+        description="Output image format: 'png', 'jpg', 'jpeg', or 'webp'. Defaults to 'png'.",
     )
     output_compression: int = Field(
         default=100,
@@ -213,11 +219,14 @@ class ImageGenerationRequest(BaseModel):
 
     @field_validator("output_format")
     @classmethod
-    def validate_output_format(cls, v):
-        valid = {"png", "jpeg", "webp"}
-        if v is not None and v not in valid:
+    def validate_output_format(cls, v: str | None) -> str | None:
+        valid = {"png", "jpg", "jpeg", "webp"}
+        if v is None:
+            return None
+        normalized = v.lower()
+        if normalized not in valid:
             raise ValueError(f"output_format must be one of {sorted(valid)}, got: '{v}'")
-        return v
+        return normalized
 
 
 class ImageData(BaseModel):
@@ -238,7 +247,7 @@ class ImageGenerationResponse(BaseModel):
     created: int = Field(..., description="Unix timestamp of when the generation completed")
     data: list[ImageData] = Field(..., description="Array of generated images")
     output_format: str | None = Field(None, description="The output format of the image generation")
-    size: str = Field(None, description="The size of the image generated")
+    size: str | None = Field(None, description="The size of the image generated")
     cot_output: str | None = Field(
         None,
         description="Chain-of-thought text output from the AR stage. "

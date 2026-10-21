@@ -138,7 +138,7 @@ def test_local_encoder_modes_preserve_validated_text_and_unified_handoff(task, t
         (image.height // 32) * (image.width // 32), 96
     )
     pipeline.audio_vae = Mock()
-    prompt = {"prompt": "A person waves."}
+    prompt: dict[str, Any] = {"prompt": "A person waves."}
     if task != "t2va":
         prompt["multi_modal_data"] = {"image": Image.new("RGB", (256, 256))}
     if text_key is not None:
@@ -167,7 +167,8 @@ def test_local_encoder_modes_preserve_validated_text_and_unified_handoff(task, t
     assert pipeline.video_vae.encode_image.call_count == int(task != "t2va")
 
 
-def test_decode_to_mp4_batches_consumer_transfers(monkeypatch):
+@pytest.mark.parametrize("decode_dtype", [torch.float16, torch.bfloat16])
+def test_decode_to_mp4_batches_consumer_transfers(monkeypatch, decode_dtype):
     from vllm_omni.diffusion.models.minimax_h3 import pipeline_minimax_h3 as mod
 
     class FakeEncoder:
@@ -196,7 +197,12 @@ def test_decode_to_mp4_batches_consumer_transfers(monkeypatch):
     class FakeVideoVAE:
         chunk_value_range = (0.0, 1.0)
 
+        def __init__(self):
+            self.decode_dtype = decode_dtype
+
         def decode_with_chunks(self, latent, *, on_chunk):
+            assert torch.is_autocast_enabled("cpu")
+            assert torch.get_autocast_dtype("cpu") == self.decode_dtype
             for value in (0.0, 0.25, 0.5):
                 on_chunk(torch.full((1, 3, 3, 2, 2), value))
 
@@ -255,6 +261,7 @@ def test_request_video_codec_options_reach_the_preencoded_mp4_encoder(monkeypatc
 
     class FakeVideoVAE:
         chunk_value_range = (0.0, 1.0)
+        decode_dtype = torch.float16
 
         def decode_with_chunks(self, latent, *, on_chunk):
             on_chunk(torch.zeros(1, 3, 1, 2, 2))
@@ -639,6 +646,7 @@ def test_encoder_task_validation_and_transformer_routing():
 )
 @pytest.mark.parametrize("load_text_encoder", [None, True, False])
 @pytest.mark.parametrize("trust_remote_code", [False, True])
+@pytest.mark.parametrize("custom_transformer", [False, True])
 def test_pipeline_loads_task_selected_components_with_encoder_ownership(
     monkeypatch,
     tmp_path,
@@ -650,6 +658,7 @@ def test_pipeline_loads_task_selected_components_with_encoder_ownership(
     expected_tasks,
     load_text_encoder,
     trust_remote_code,
+    custom_transformer,
 ):
     from vllm_omni.diffusion.data import (
         DiffusionParallelConfig,
@@ -688,6 +697,12 @@ def test_pipeline_loads_task_selected_components_with_encoder_ownership(
         def __init__(self, *args, **kwargs):
             super().__init__()
             created["dit"].append((args, kwargs))
+
+    class CustomDiT(FakeDiT):
+        pass
+
+    class CustomPipeline(pipeline_module.MiniMaxH3Pipeline):
+        _transformer_cls = CustomDiT
 
     def component_factory(name):
         def create(path, *args, **kwargs):
@@ -730,6 +745,10 @@ def test_pipeline_loads_task_selected_components_with_encoder_ownership(
         fake_download,
     )
 
+    # The pipeline download is mocked above; config normalization must not
+    # independently resolve the gated repository through the local HF cache.
+    monkeypatch.setattr("vllm_omni.diffusion.data.get_model_path", lambda model, revision: model)
+
     od_config = OmniDiffusionConfig(
         model="MiniMaxAI/MiniMax-H3",
         trust_remote_code=trust_remote_code,
@@ -744,9 +763,14 @@ def test_pipeline_loads_task_selected_components_with_encoder_ownership(
     if load_text_encoder is not None:
         od_config.model_loaded["text_encoder"] = load_text_encoder
         od_config.model_loaded["vae_encoder"] = load_text_encoder
-    pipeline = pipeline_module.MiniMaxH3Pipeline(od_config=od_config)
+    pipeline_cls = CustomPipeline if custom_transformer else pipeline_module.MiniMaxH3Pipeline
+    pipeline = pipeline_cls(od_config=od_config)
     expect_encoder = load_text_encoder is not False
 
+    assert type(pipeline.transformer) is (CustomDiT if custom_transformer else FakeDiT)
+    if expected_dits == 2:
+        # A derived pipeline's primary DiT must not replace the separate Ref2VA model.
+        assert type(pipeline.transformers_ref) is FakeDiT
     assert pipeline.partition == expected_partition
     assert pipeline.supported_tasks == expected_tasks
     assert len(created["dit"]) == expected_dits
@@ -1487,19 +1511,39 @@ def test_rainfusion_packed_padding_stays_mask_free_on_unaligned_lengths():
     assert metadata.extra["valid_kv_length"] == 5
 
 
-def test_reference_image_resize_contract():
+@pytest.mark.parametrize(
+    ("size", "expected"),
+    [
+        ((1344, 768), (1344, 768)),
+        ((640, 384), (640, 384)),
+        ((2688, 1536), (2688, 1536)),
+        ((1536, 2688), (1536, 2688)),
+        ((3072, 3072), (3072, 3072)),
+        ((1080, 1440), (1088, 1440)),
+        ((648, 392), (640, 384)),
+    ],
+)
+def test_reference_image_resize_contract(size, expected):
     from PIL import Image
 
     from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
         resolve_minimax_h3_reference_image_shape,
     )
 
-    assert resolve_minimax_h3_reference_image_shape(Image.new("RGB", (1080, 1440))) == (
-        2048,
-        2720,
+    assert resolve_minimax_h3_reference_image_shape(Image.new("RGB", size)) == expected
+
+
+def test_reference_image_resize_rejects_invalid_input():
+    from PIL import Image
+
+    from vllm_omni.model_executor.models.minimax_h3.preprocessing import (
+        resolve_minimax_h3_reference_image_shape,
     )
+
     with pytest.raises(ValueError, match="aspect ratio"):
         resolve_minimax_h3_reference_image_shape(Image.new("RGB", (100, 501)))
+    with pytest.raises(ValueError, match="dimensions"):
+        resolve_minimax_h3_reference_image_shape(Image.new("RGB", (128, 128)))
 
 
 def test_fl2va_supports_first_last_and_explicit_frame_index_contracts():
@@ -1678,13 +1722,26 @@ def test_encoder_forward_forwards_video_inputs():
     )
 
 
-def test_reference_video_shape_uses_h3_adapt_shape_policy():
+@pytest.mark.parametrize(
+    ("size", "expected"),
+    [
+        ((640, 384), (640, 384)),
+        ((384, 640), (384, 640)),
+        ((1280, 720), (1280, 704)),
+        ((1344, 768), (1344, 768)),
+        ((1920, 1152), (1280, 768)),
+        ((1152, 1920), (768, 1280)),
+        ((3844, 2160), (1344, 768)),
+        ((2160, 3844), (768, 1344)),
+        ((2048, 2048), (768, 768)),
+    ],
+)
+def test_reference_video_shape_caps_large_inputs_without_enlarging_small_inputs(size, expected):
     from vllm_omni.model_executor.models.minimax_h3.reference_video import (
         _reference_video_shape,
     )
 
-    assert _reference_video_shape(1280, 720) == (1344, 768)
-    assert _reference_video_shape(3844, 2160) == (1344, 768)
+    assert _reference_video_shape(*size) == expected
 
 
 def test_text_encoder_stub_constructs_without_group_or_weights():
@@ -2398,20 +2455,22 @@ def test_ref2va_reference_count_validation_preserves_client_error_metadata():
 
 
 @pytest.mark.parametrize(
-    ("case", "start_time", "expected_duration"),
+    ("case", "start_time", "expected_duration", "input_size", "expected_size"),
     [
-        ("R7", None, 10.0),
-        ("R8", 4.0, 6.0),
+        ("R7", None, 10.0, (3844, 2160), (1344, 768)),
+        ("R8", 4.0, 6.0, (640, 384), (640, 384)),
     ],
 )
-def test_r7_r8_ref2va_video_segment_matrix(monkeypatch, tmp_path, case, start_time, expected_duration):
+def test_r7_r8_ref2va_video_segment_matrix(
+    monkeypatch, tmp_path, case, start_time, expected_duration, input_size, expected_size
+):
     from vllm_omni.diffusion.models.minimax_h3 import reference_video as reference_video_module
 
     source = tmp_path / f"{case}.mp4"
     source.touch()
     metadata = {
-        "width": 1280,
-        "height": 720,
+        "width": input_size[0],
+        "height": input_size[1],
         "fps": 24.0,
         "frame_count": 240,
         "duration": 10.0,
@@ -2440,6 +2499,8 @@ def test_r7_r8_ref2va_video_segment_matrix(monkeypatch, tmp_path, case, start_ti
     assert prepared[0]["start_time_seconds"] == pytest.approx(start_time or 0.0)
     assert transcode_calls[0][1]["duration_seconds"] == pytest.approx(expected_duration)
     assert transcode_calls[0][1]["target_frame_count"] == 209
+    assert (prepared[0]["width"], prepared[0]["height"]) == expected_size
+    assert (transcode_calls[0][1]["target_width"], transcode_calls[0][1]["target_height"]) == expected_size
 
 
 def test_ref2va_transcode_zero_frame_count_keeps_video_stream(monkeypatch, tmp_path):
@@ -3426,6 +3487,7 @@ def _peer_rank_preencode_pipeline(monkeypatch):
 
     class PeerRankVideoVAE:
         chunk_value_range = (0.0, 1.0)
+        decode_dtype = torch.float16
 
         def decode_with_chunks(self, latent, *, on_chunk):
             del latent, on_chunk
@@ -3514,7 +3576,7 @@ def test_request_cancellation_at_prepare_and_decode_boundaries(preencode, cancel
     def prepare(*args):
         if cancel_phase == "prepare":
             registry.cancel(["request"])
-        return {"num_outputs": 1, "seed": 1101, "preencode_mp4": preencode}
+        return {"num_outputs": 1, "seed": 1101, "preencode_mp4": preencode, "height": 2, "width": 2}
 
     def diffuse(**kwargs):
         registry.cancel(["request"])

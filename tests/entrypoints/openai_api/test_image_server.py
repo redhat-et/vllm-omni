@@ -1381,12 +1381,13 @@ def test_parameter_validation():
     assert req.num_inference_steps is None  # Engine will use model defaults
     assert req.true_cfg_scale is None  # Engine will use model defaults
 
-    # Text fields must contain something other than whitespace.
+    # Prompts must contain something other than whitespace, except that an empty
+    # negative prompt enables guidance with no negative text for Qwen-Image.
     with pytest.raises(ValueError, match="non-empty"):
         ImageGenerationRequest(prompt="   ")
-    for field in ("negative_prompt", "system_prompt"):
-        with pytest.raises(ValueError, match="non-empty"):
-            ImageGenerationRequest(prompt="test", **{field: "   "})
+    with pytest.raises(ValueError, match="non-empty"):
+        ImageGenerationRequest(prompt="test", system_prompt="   ")
+    assert ImageGenerationRequest(prompt="test", negative_prompt="").negative_prompt == ""
 
     # Preserve the signed int64 seed contract and supported image formats.
     for seed in (-(2**63), -1, 0, 2**32, 2**63 - 1):

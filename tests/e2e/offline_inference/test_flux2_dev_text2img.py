@@ -123,28 +123,49 @@ def test_flux2_dev_text_to_image_multi_output(omni_runner_handler: OmniRunnerHan
 
 @hardware_test(res={"cuda": "H100"})
 def test_flux2_dev_text_to_image_with_cfg(omni_runner_handler: OmniRunnerHandler):
-    response = omni_runner_handler.send_diffusion_request(
+    prompt = "A cinematic mountain landscape at sunrise"
+    seed = 42
+    cfg_response = omni_runner_handler.send_diffusion_request(
         {
             "model": MODEL,
-            "prompt": "A cinematic mountain landscape at sunrise",
+            "prompt": prompt,
             "negative_prompt": "blurry, low quality",
             "sampling_params": OmniDiffusionSamplingParams(
                 height=_HEIGHT,
                 width=_WIDTH,
                 num_inference_steps=_NUM_INFERENCE_STEPS,
-                seed=42,
+                seed=seed,
                 guidance_scale=4.0,
             ),
         }
     )
-    images = _images_from_response(response)
-    assert len(images) > 0, "No images in response"
-    for img in images:
+    baseline_response = omni_runner_handler.send_diffusion_request(
+        {
+            "model": MODEL,
+            "prompt": prompt,
+            "sampling_params": OmniDiffusionSamplingParams(
+                height=_HEIGHT,
+                width=_WIDTH,
+                num_inference_steps=_NUM_INFERENCE_STEPS,
+                seed=seed,
+                guidance_scale=1.0,
+            ),
+        }
+    )
+    cfg_images = _images_from_response(cfg_response)
+    baseline_images = _images_from_response(baseline_response)
+    assert len(cfg_images) > 0, "No CFG images in response"
+    assert len(baseline_images) > 0, "No baseline images in response"
+    for img in [*cfg_images, *baseline_images]:
         assert_image_valid(img, width=_WIDTH, height=_HEIGHT)
+    assert not np.array_equal(
+        np.array(cfg_images[0]),
+        np.array(baseline_images[0]),
+    ), "True CFG should change the output for the same prompt and seed"
 
 
 @hardware_test(res={"cuda": "H100"})
-@pytest.mark.xfail(reason="Missing input validation: #3702", strict=True)
+@pytest.mark.xfail(reason="FLUX.2-dev empty-prompt validation: #9576", strict=True)
 def test_flux2_dev_rejects_empty_prompt(omni_runner_handler: OmniRunnerHandler):
     with pytest.raises((ValueError, RuntimeError)):
         omni_runner_handler.send_diffusion_request(
@@ -162,7 +183,7 @@ def test_flux2_dev_rejects_empty_prompt(omni_runner_handler: OmniRunnerHandler):
 
 
 @hardware_test(res={"cuda": "H100"})
-@pytest.mark.xfail(reason="Missing input validation: #3703", strict=True)
+@pytest.mark.xfail(reason="FLUX.2-dev inference-step validation: #9575", strict=True)
 def test_flux2_dev_rejects_zero_inference_steps(omni_runner_handler: OmniRunnerHandler):
     with pytest.raises((ValueError, RuntimeError)):
         omni_runner_handler.send_diffusion_request(
